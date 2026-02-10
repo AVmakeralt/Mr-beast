@@ -42,30 +42,10 @@ local FRAME_DATA = {
         throw = false, anti_air = false, proximity_guard = false, pushback_on_hit = 0, pushback_on_block = 0,
         hitboxes = {}, air_ok = true, ground_ok = true, cancel = {}
     },
-    walk_fwd = {
-        startup = 0, active = 1, recovery = 0, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0,
-        meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true,
-        pushback_on_hit = 0, pushback_on_block = 0, move_speed = GAME_CONSTANTS.WALK_ACCEL, hitboxes = {},
-        air_ok = false, ground_ok = true, cancel = { light = { 1 }, heavy = { 1 }, throw = { 1 }, block = { 1 }, jump = { 1 }, special = { 1 } }
-    },
-    walk_back = {
-        startup = 0, active = 1, recovery = 0, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0,
-        meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true,
-        pushback_on_hit = 0, pushback_on_block = 0, move_speed = GAME_CONSTANTS.WALK_ACCEL, hitboxes = {},
-        air_ok = false, ground_ok = true, cancel = { light = { 1 }, heavy = { 1 }, throw = { 1 }, block = { 1 }, jump = { 1 }, special = { 1 } }
-    },
-    jump = {
-        startup = 2, active = 16, recovery = 3, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0,
-        meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = false,
-        pushback_on_hit = 0, pushback_on_block = 0, jump_velocity = GAME_CONSTANTS.FULL_JUMP_VEL, hitboxes = {},
-        air_ok = true, ground_ok = true, cancel = { block = { 3, 4, 5 }, light = { 4, 5, 6 }, heavy = { 5, 6 }, special = { 4, 5, 6 } }
-    },
-    block = {
-        startup = 1, active = 3, recovery = 1, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0,
-        meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true,
-        pushback_on_hit = 0, pushback_on_block = GAME_CONSTANTS.SHIELD_PUSH, hitboxes = {},
-        air_ok = false, ground_ok = true, cancel = { walk_fwd = { 2, 3 }, walk_back = { 2, 3 }, jump = { 3 }, light = { 3 }, throw = { 3 } }
-    },
+    walk_fwd = { startup = 0, active = 0, recovery = 0, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0, meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true, pushback_on_hit = 0, pushback_on_block = 0, hitboxes = {}, air_ok = false, ground_ok = true, cancel = {} },
+    walk_back = { startup = 0, active = 0, recovery = 0, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0, meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true, pushback_on_hit = 0, pushback_on_block = 0, hitboxes = {}, air_ok = false, ground_ok = true, cancel = {} },
+    jump = { startup = 2, active = 16, recovery = 2, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0, meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = false, pushback_on_hit = 0, pushback_on_block = 0, hitboxes = {}, air_ok = true, ground_ok = true, cancel = {} },
+    block = { startup = 1, active = 1, recovery = 1, on_hit = 0, on_block = 0, damage = 0, chip = 0, guard_crush = 0, meter_gain_hit = 0, meter_gain_block = 0, invuln = 0, throw = false, anti_air = false, proximity_guard = true, pushback_on_hit = 0, pushback_on_block = 0, hitboxes = {}, air_ok = false, ground_ok = true, cancel = {} },
     light = {
         startup = 4, active = 3, recovery = 8, on_hit = 10, on_block = -2, damage = 7, chip = 0.5, guard_crush = 1,
         meter_gain_hit = GAME_CONSTANTS.FLUX_ON_HIT, meter_gain_block = 3, invuln = 0, throw = false, anti_air = true,
@@ -160,46 +140,6 @@ local DEFAULT_CONFIG = {
         learning_rate = 0.0005
     },
 
-    blueprint = {
-        enabled = true,
-        blend_policy = 0.7,
-        blend_value = 0.35,
-        top_k = 5
-    },
-
-    cfr = {
-        enabled = true,
-        subgame_iterations = 32,
-        mix_strength = 0.45
-    },
-
-    timing_predictor = {
-        enabled = true,
-        max_delay = 12
-    },
-
-    deception_estimator = {
-        enabled = true,
-        blend = 0.3
-    },
-
-    opponent_policy_net = {
-        enabled = true,
-        blend = 0.5
-    },
-
-    risk_adjuster = {
-        enabled = true,
-        blend = 0.35
-    },
-
-    multires_search = {
-        enabled = true,
-        coarse_depth = 2,
-        fine_depth = 8,
-        top_k = 4
-    },
-
     mcts = {
         enabled = true,
         simulations = 1024,
@@ -213,9 +153,7 @@ local DEFAULT_CONFIG = {
         horizon_frames = 24,
         use_for_search = true,
         uncertainty_mix = 0.35,
-        feature_dim = 20,
-        hidden_dim = 24,
-        train_on_logs = true
+        feature_dim = 20
     },
 
     self_improvement = {
@@ -223,9 +161,7 @@ local DEFAULT_CONFIG = {
         volatility_trigger = 10,
         solved_cache_min_visits = 8,
         solved_cache_score_band = 5,
-        rollback_eval_drop = 12,
-        tt_max_entries = 120000,
-        novelty_decay = 0.995
+        rollback_eval_drop = 12
     },
 
     ablations = {
@@ -258,38 +194,6 @@ local function clamp(v, lo, hi)
     if v < lo then return lo end
     if v > hi then return hi end
     return v
-end
-
-local function has_entries(tbl)
-    return type(tbl) == "table" and next(tbl) ~= nil
-end
-
-local function table_size(tbl)
-    if type(tbl) ~= "table" then return 0 end
-    local c = 0
-    for _ in pairs(tbl) do c = c + 1 end
-    return c
-end
-
-local REQUIRED_FRAME_KEYS = {
-    "startup", "active", "recovery", "on_hit", "on_block", "damage", "chip",
-    "guard_crush", "meter_gain_hit", "meter_gain_block", "invuln", "throw", "anti_air",
-    "proximity_guard", "pushback_on_hit", "pushback_on_block", "hitboxes", "air_ok", "ground_ok", "cancel"
-}
-
-local function normalize_frame_data()
-    local base = FRAME_DATA.idle or {}
-    for action, fd in pairs(FRAME_DATA) do
-        if type(fd) ~= "table" then
-            FRAME_DATA[action] = deepcopy(base)
-            fd = FRAME_DATA[action]
-        end
-        for _, k in ipairs(REQUIRED_FRAME_KEYS) do
-            if fd[k] == nil then fd[k] = deepcopy(base[k]) end
-        end
-        if type(fd.hitboxes) ~= "table" then fd.hitboxes = {} end
-        if type(fd.cancel) ~= "table" then fd.cancel = {} end
-    end
 end
 
 local function now_ms()
@@ -338,8 +242,6 @@ function AI:new(player, opponent, config)
             end
         end
     end
-
-    normalize_frame_data()
 
     self.player = player
     self.opponent = opponent
@@ -398,10 +300,8 @@ function AI:new(player, opponent, config)
     }
 
     self.transposition = {}
-    self.transposition_age = 0
     self.history_heuristic = {}
     self.killer_moves = {}
-    self.novelty_memory = { counts = {}, last_decay_frame = 0 }
 
     self.fairness = {
         information_parity = true,
@@ -423,12 +323,7 @@ function AI:new(player, opponent, config)
         misinformation_plan = { enabled = true, armed = false },
         strategy_popularity = {},
         adaptation_speed = {},
-        regret_memory = {},
-        archetype_centroids = {
-            rushdown = { aggression = 0.8, adaptation_speed = 0.6, panic = 0.55 },
-            turtling = { aggression = 0.25, adaptation_speed = 0.45, panic = 0.35 },
-            balanced = { aggression = 0.5, adaptation_speed = 0.5, panic = 0.5 }
-        }
+        regret_memory = {}
     }
 
     self.dataset_priors = {
@@ -479,7 +374,7 @@ function AI:new(player, opponent, config)
     self.rl = { steps = 0, epochs = 0, last_loss = 0, enabled = false }
     self.world_model = nil
     self.world_model_loaded = false
-    self.world_model_stats = { calls = 0, fallback = 0, train_steps = 0, train_loss = 0 }
+    self.world_model_stats = { calls = 0, fallback = 0 }
     self.causal_trace = {}
     self.opponent_shaping = { revealed_weakness = false, bait_window = 0, conditioned = 0 }
 
@@ -514,12 +409,7 @@ function AI:new(player, opponent, config)
         degradation = {},
         shaping = {},
         benchmarks = {},
-        rl = {},
-        blueprint = {},
-        cfr = {},
-        timing = {},
-        strategy_class = {},
-        multires = {}
+        rl = {}
     }
 
     self.learning = {
@@ -542,43 +432,6 @@ function AI:new(player, opponent, config)
         last_loss = 0
     }
     self:loadOrInitCritic()
-
-    self.blueprint = {
-        enabled = self.config.blueprint and self.config.blueprint.enabled or false,
-        policy_w = {},
-        value_w = {},
-        updates = 0
-    }
-    self.cfr = {
-        enabled = self.config.cfr and self.config.cfr.enabled or false,
-        regrets = {},
-        strategy_sum = {}
-    }
-    self.timing_predictor = {
-        enabled = self.config.timing_predictor and self.config.timing_predictor.enabled or false,
-        w = {0.2, -0.15, 0.1, 0.25, -0.2, 0.18},
-        b = 4.0
-    }
-    self.strategy_classifier = {
-        current = "balanced",
-        confidence = 0.5,
-        history = {}
-    }
-    self.deception_model = {
-        enabled = self.config.deception_estimator and self.config.deception_estimator.enabled or false,
-        w = {0.4, 0.3, -0.25, 0.2},
-        b = 0
-    }
-    self.opponent_policy_net = {
-        enabled = self.config.opponent_policy_net and self.config.opponent_policy_net.enabled or false,
-        w = { light = {0.25,-0.1,0.2}, block = {-0.1,0.3,0.2}, walk_back = {-0.15,0.25,0.1}, jump = {0.2,-0.2,0.15}, throw = {0.15,-0.05,0.1} },
-        b = { light = 0, block = 0, walk_back = 0, jump = 0, throw = 0 }
-    }
-    self.risk_adjuster = {
-        enabled = self.config.risk_adjuster and self.config.risk_adjuster.enabled or false,
-        w = {0.35, 0.25, 0.2, -0.15},
-        b = 0
-    }
 
     self.motor_noise = (1 - self.config.difficulty) * 0.12
     self:loadWorldModel()
@@ -659,41 +512,20 @@ end
 
 function AI:_hashState(state)
     local q = function(v, s) return math.floor((v or 0) / s) end
-    local parts = {
-        q(state.px, 6), q(state.ox, 6), q(state.py, 6), q(state.oy, 6),
-        q(state.p_health, 3), q(state.o_health, 3), q(state.p_meter, 5), q(state.o_meter, 5),
-        q(state.p_hitstun, 1), q(state.o_hitstun, 1), q(state.p_blockstun, 1), q(state.o_blockstun, 1),
-        (state.p_airborne and 1 or 0), (state.o_airborne and 1 or 0),
-        q(state.p_frame, 1), q(state.o_frame, 1),
-        tostring(state.p_move or "idle"), tostring(state.o_move or "idle")
-    }
-    local h = 2166136261
-    for i = 1, #parts do
-        local t = tostring(parts[i])
-        for j = 1, #t do
-            h = ((h * 131) + string.byte(t, j) + i * 17 + j) % 4294967291
-        end
-    end
-    return string.format("%08x", h)
+    return string.format(
+        "%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d",
+        q(state.px, 8), q(state.ox, 8), q(state.py, 8), q(state.oy, 8),
+        q(state.p_health, 5), q(state.o_health, 5), q(state.p_meter, 10), q(state.o_meter, 10),
+        state.p_move or "idle", state.o_move or "idle", state.p_hitstun or 0, state.o_hitstun or 0
+    )
 end
 
 function AI:_estimateNovelty(state)
-    self.novelty_memory = self.novelty_memory or { counts = {}, last_decay_frame = 0 }
-    local mem = self.novelty_memory
-    if (self.frame - (mem.last_decay_frame or 0)) >= 60 then
-        local decay = self.config.self_improvement.novelty_decay or 0.995
-        for k, v in pairs(mem.counts) do
-            local nv = v * decay
-            if nv < 0.05 then mem.counts[k] = nil else mem.counts[k] = nv end
-        end
-        mem.last_decay_frame = self.frame
-    end
-
     local key = self:_hashState(state)
-    local seen = mem.counts[key] or 0
-    mem.counts[key] = seen + 1
-    local intrinsic = 1.0 / math.sqrt(1 + seen)
-    return clamp(intrinsic, 0.02, 1.0)
+    self.novelty_memory = self.novelty_memory or {}
+    local seen = self.novelty_memory[key] or 0
+    self.novelty_memory[key] = seen + 1
+    return 1.0 / (1 + seen)
 end
 
 function AI:_observeState()
@@ -983,24 +815,15 @@ end
 
 function AI:_counterfactualResponsibility(obs, action)
     local options = { "block", "walk_back", "light", "throw", "special" }
-    local opp_options = { "idle", "block", "walk_back", "light" }
     local best_alt, best_score = action, -1e9
     local realized = self:evaluateState(obs)
     local root = self:_initSimState(obs)
-    local horizon = 10
-
-    local chosen_score = 0
-    for _, oa in ipairs(opp_options) do
-        local chosen_next = self:_applyActionOrMacro(root, action or "idle", oa, horizon)
-        chosen_score = chosen_score + 0.25 * self:evaluateState(chosen_next)
-    end
+    local chosen_next = self:_applyActionOrMacro(root, action or "idle", "idle", 6)
+    local chosen_score = self:evaluateState(chosen_next)
 
     for _, a in ipairs(options) do
-        local sc = 0
-        for _, oa in ipairs(opp_options) do
-            local n = self:_applyActionOrMacro(root, a, oa, horizon)
-            sc = sc + 0.25 * self:evaluateState(n)
-        end
+        local n = self:_applyActionOrMacro(root, a, "idle", 6)
+        local sc = self:evaluateState(n)
         if sc > best_score then best_score = sc; best_alt = a end
     end
 
@@ -1018,8 +841,7 @@ function AI:_counterfactualResponsibility(obs, action)
         chosen_score = chosen_score,
         best_alternative = best_alt,
         best_score = best_score,
-        blame = blame,
-        horizon = horizon
+        blame = blame
     }
 end
 
@@ -1202,217 +1024,6 @@ function AI:trainCriticFromLogs(opts)
     return { epochs = epochs, samples = n, avg_loss = avg, updates = self.critic.updates }
 end
 
-function AI:_strategyFingerprint()
-    local st = self.player_model.short_term_window
-    local n = math.min(180, #st)
-    if n == 0 then return "balanced", 0.3 end
-    local atk, def, bait = 0, 0, 0
-    for i = #st - n + 1, #st do
-        local a = st[i]
-        if a == "light" or a == "heavy" or a == "special" or a == "throw" then atk = atk + 1 end
-        if a == "block" or a == "walk_back" then def = def + 1 end
-        if i > 1 and st[i-1] == "walk_back" and a == "light" then bait = bait + 1 end
-    end
-    local a_r, d_r, b_r = atk / n, def / n, bait / n
-    local cls = "balanced"
-    if a_r > 0.58 then cls = "rushdown" end
-    if d_r > 0.5 then cls = "turtling" end
-    if b_r > 0.16 then cls = "bait_heavy" end
-    local conf = clamp(math.max(a_r, d_r, b_r), 0.2, 0.95)
-    self.strategy_classifier.current = cls
-    self.strategy_classifier.confidence = conf
-    self.logs.strategy_class[#self.logs.strategy_class + 1] = { frame = self.frame, class = cls, confidence = conf, atk = a_r, def = d_r, bait = b_r }
-    return cls, conf
-end
-
-function AI:_timingDelay(features)
-    if not self.timing_predictor.enabled then return 0 end
-    local x = {
-        features.frame_advantage or 0,
-        features.threat_count or 0,
-        features.risk_exposure or 0,
-        features.throw_threat or 0,
-        features.uncertainty or 0,
-        features.deception_value or 0
-    }
-    local z = self.timing_predictor.b or 0
-    for i = 1, #x do z = z + (self.timing_predictor.w[i] or 0) * x[i] end
-    local d = math.floor(clamp(z, 0, self.config.timing_predictor.max_delay))
-    self.logs.timing[#self.logs.timing + 1] = { frame = self.frame, delay = d, z = z }
-    return d
-end
-
-function AI:_deceptionEstimate(features)
-    if not self.deception_model.enabled then return features.deception_value or 0 end
-    local x = {
-        self.belief.respect_decay or 0,
-        self.belief.overconfidence or 0,
-        self.player_model.style.tilt_level or 0,
-        (features.info_gain or 0)
-    }
-    local z = self.deception_model.b or 0
-    for i = 1, #x do z = z + (self.deception_model.w[i] or 0) * x[i] end
-    local val = clamp(math.tanh(z), -1, 1)
-    return (1 - self.config.deception_estimator.blend) * (features.deception_value or 0) + self.config.deception_estimator.blend * val
-end
-
-function AI:_opponentPolicyPrior(obs)
-    if not self.opponent_policy_net.enabled then return nil end
-    local x = {
-        self.player_model.style.aggression or 0.5,
-        self.player_model.style.backdash_frequency or 0.5,
-        self.belief.perceived_threat or 0.5
-    }
-    local out, sum = {}, 0
-    for a, w in pairs(self.opponent_policy_net.w) do
-        local z = self.opponent_policy_net.b[a] or 0
-        for i = 1, #x do z = z + (w[i] or 0) * x[i] end
-        local p = math.exp(clamp(z, -5, 5))
-        out[a] = p
-        sum = sum + p
-    end
-    if sum > 0 then for a, p in pairs(out) do out[a] = p / sum end end
-    return out
-end
-
-function AI:_riskAdjustedScore(score, features)
-    if not self.risk_adjuster.enabled then return score end
-    local x = {
-        features.uncertainty or 0,
-        self.belief.overconfidence or 0,
-        self.player_model.style.tilt_level or 0,
-        features.robustness or 0
-    }
-    local z = self.risk_adjuster.b or 0
-    for i = 1, #x do z = z + (self.risk_adjuster.w[i] or 0) * x[i] end
-    local r = math.tanh(z)
-    local b = clamp(self.config.risk_adjuster.blend or 0.35, 0, 1)
-    return score - b * (r * 20)
-end
-
-function AI:_blueprintForward(features)
-    if not self.blueprint.enabled or not self.blueprint.value_w then return nil, nil end
-    local x = self:_criticFeatureVector(features)
-    local value = 0
-    for i = 1, #x do value = value + (self.blueprint.value_w[i] or 0) * x[i] end
-    value = math.tanh(value) * 100
-
-    local pol = {}
-    local sum = 0
-    for _, a in ipairs(ACTIONS) do
-        local w = (self.blueprint.policy_w[a] or {})
-        local logit = 0
-        for i = 1, #x do logit = logit + (w[i] or 0) * x[i] end
-        local p = math.exp(clamp(logit, -6, 6))
-        pol[a] = p
-        sum = sum + p
-    end
-    if sum > 0 then for a, p in pairs(pol) do pol[a] = p / sum end end
-    return pol, value
-end
-
-function AI:trainBlueprintFromDeepSearch(samples)
-    local n = math.max(32, samples or 256)
-    self.blueprint.value_w = self.blueprint.value_w or {}
-    self.blueprint.policy_w = self.blueprint.policy_w or {}
-    for _, a in ipairs(ACTIONS) do self.blueprint.policy_w[a] = self.blueprint.policy_w[a] or {} end
-
-    local lr = 0.0008
-    local start_i = math.max(1, #self.logs.training_samples - n + 1)
-    local count = 0
-    for i = start_i, #self.logs.training_samples do
-        local smp = self.logs.training_samples[i]
-        if smp and smp.state then
-            local _, f = self:evaluateState(smp.state)
-            local x = self:_criticFeatureVector(f)
-            local target_v = clamp((smp.search_score or 0), -100, 100)
-            local best_a = smp.chosen_action or "idle"
-
-            local pred_v = 0
-            for k = 1, #x do pred_v = pred_v + (self.blueprint.value_w[k] or 0) * x[k] end
-            local err = target_v / 100 - math.tanh(pred_v)
-            for k = 1, #x do self.blueprint.value_w[k] = (self.blueprint.value_w[k] or 0) + lr * err * x[k] end
-
-            for _, a in ipairs(ACTIONS) do
-                local y = (a == best_a) and 1 or 0
-                local w = self.blueprint.policy_w[a]
-                local logit = 0
-                for k = 1, #x do logit = logit + (w[k] or 0) * x[k] end
-                local p = 1 / (1 + math.exp(-logit))
-                local e = y - p
-                for k = 1, #x do w[k] = (w[k] or 0) + lr * e * x[k] end
-            end
-            count = count + 1
-        end
-    end
-    self.blueprint.updates = self.blueprint.updates + count
-    self.logs.blueprint[#self.logs.blueprint + 1] = { frame = self.frame, updates = count }
-    return { updates = count }
-end
-
-function AI:_cfrKey(state)
-    local phase = self:_currentPhase(state)
-    local dist = math.floor(math.abs((state.ox or 0) - (state.px or 0)) / 20)
-    local adv = (state.frame_advantage or 0) > 0 and "plus" or "minus"
-    return string.format("%s|%s|%d", phase, adv, dist)
-end
-
-function AI:_cfrSolveSubgame(state)
-    if not self.cfr.enabled then return nil end
-    local key = self:_cfrKey(state)
-    self.cfr.regrets[key] = self.cfr.regrets[key] or {}
-    self.cfr.strategy_sum[key] = self.cfr.strategy_sum[key] or {}
-
-    local regrets = self.cfr.regrets[key]
-    local strat = {}
-    local norm = 0
-    for _, a in ipairs(ACTIONS) do
-        local r = math.max(0, regrets[a] or 0)
-        strat[a] = r
-        norm = norm + r
-    end
-    if norm <= 1e-6 then
-        for _, a in ipairs(ACTIONS) do strat[a] = 1 / #ACTIONS end
-    else
-        for _, a in ipairs(ACTIONS) do strat[a] = strat[a] / norm end
-    end
-
-    for _ = 1, self.config.cfr.subgame_iterations do
-        local util = {}
-        local avg = 0
-        for _, a in ipairs(ACTIONS) do
-            local nxt = self:_rolloutState(state, a, "idle", 4)
-            util[a] = self:evaluateState(nxt)
-            avg = avg + strat[a] * util[a]
-        end
-        for _, a in ipairs(ACTIONS) do
-            local reg = util[a] - avg
-            regrets[a] = (regrets[a] or 0) + reg * 0.01
-            self.cfr.strategy_sum[key][a] = (self.cfr.strategy_sum[key][a] or 0) + strat[a]
-        end
-    end
-
-    self.logs.cfr[#self.logs.cfr + 1] = { frame = self.frame, key = key }
-    return strat
-end
-
-function AI:_multiresCandidates(state, deadline_ms)
-    local actions = self:_legalActionSet(state)
-    local scored = {}
-    local coarse_d = self.config.multires_search.coarse_depth
-    for _, a in ipairs(actions) do
-        local s = self:_rolloutState(state, a, "idle", 4)
-        local v = self:evaluateState(s)
-        scored[#scored + 1] = { action = a, score = v }
-    end
-    table.sort(scored, function(x,y) return x.score > y.score end)
-    local topk = math.min(self.config.multires_search.top_k, #scored)
-    local out = {}
-    for i = 1, topk do out[#out + 1] = scored[i].action end
-    self.logs.multires[#self.logs.multires + 1] = { frame = self.frame, candidates = out, coarse_depth = coarse_d }
-    return out
-end
-
 function AI:_manualCriticForward(features)
     if not self.nn or not self.config.hybrid.critic_enabled then return nil, nil end
     local x = {
@@ -1421,22 +1032,12 @@ function AI:_manualCriticForward(features)
         features.uncertainty or 0, features.neutral_control or 0, features.throw_threat or 0,
         features.anti_air_readiness or 0
     }
-
-    if self.nn.W1 and self.nn.W2 then
-        local h = {}
-        for j = 1, #(self.nn.W1[1] or {}) do
-            local z = (self.nn.b1 and self.nn.b1[j]) or 0
-            for i = 1, #x do z = z + (self.nn.W1[i] and self.nn.W1[i][j] or 0) * x[i] end
-            h[j] = math.tanh(z)
-        end
-        local out = self.nn.b2 or 0
-        for j = 1, #h do out = out + (self.nn.W2[j] or 0) * h[j] end
-        return math.tanh(out), { x = x, h = h }
-    end
-
     local value = 0
-    for i = 1, #x do value = value + (self.nn.value_w and self.nn.value_w[i] or 0) * x[i] end
-    return math.tanh(value), { x = x }
+    for i = 1, #x do
+        value = value + (self.nn.value_w and self.nn.value_w[i] or 0) * x[i]
+    end
+    value = math.tanh(value)
+    return value, nil
 end
 
 function AI:evaluateFeatures(features)
@@ -1458,7 +1059,7 @@ function AI:evaluateFeatures(features)
     score = score - 0.6 * (features.uncertainty or 0)
     score = score + 0.45 * (features.robustness or 0)
     score = score + 0.35 * (features.info_gain or 0)
-    score = score + 0.2 * self:_deceptionEstimate(features)
+    score = score + 0.2 * (features.deception_value or 0)
 
     score = score * (self.config.phase_weights[features.phase or "neutral"] or 1.0)
     if self.active_phase_policy and self.active_phase_policy.eval_scale then
@@ -1478,7 +1079,6 @@ function AI:evaluateState(state)
     if self.critic and self.critic.enabled then
         learned_val = self:_criticForward(f)
     end
-    local bp_pol, bp_val = self:_blueprintForward(f)
 
     local score = linear
     if nn_value and self.config.hybrid.enabled then
@@ -1491,12 +1091,6 @@ function AI:evaluateState(state)
         score = (1 - b) * score + b * learned_val
     end
 
-    if bp_val and self.blueprint.enabled then
-        local bv = clamp(self.config.blueprint.blend_value or 0.35, 0, 0.8)
-        score = (1 - bv) * score + bv * bp_val
-    end
-
-    score = self:_riskAdjustedScore(score, f)
     return score, f
 end
 
@@ -1550,16 +1144,26 @@ function AI:_applyActionToChar(state, who, action)
     if who == "opp" then
         if action == "walk_fwd" then self:_moveToward(state, "opp") end
         if action == "walk_back" then self:_moveAway(state, "opp") end
-        if action == "jump" and not state.o_airborne then state.o_airborne = true; state.o_vy = GAME_CONSTANTS.FULL_JUMP_VEL end
+        if action == "jump" and not state.o_airborne then state.o_airborne = true; state.o_vy = -12 end
         state.o_move = action
         state.o_frame = 0
     else
         if action == "walk_fwd" then self:_moveToward(state, "plr") end
         if action == "walk_back" then self:_moveAway(state, "plr") end
-        if action == "jump" and not state.p_airborne then state.p_airborne = true; state.p_vy = GAME_CONSTANTS.FULL_JUMP_VEL end
+        if action == "jump" and not state.p_airborne then state.p_airborne = true; state.p_vy = -12 end
         state.p_move = action
         state.p_frame = 0
     end
+    self.blueprint.updates = self.blueprint.updates + count
+    self.logs.blueprint[#self.logs.blueprint + 1] = { frame = self.frame, updates = count }
+    return { updates = count }
+end
+
+function AI:_cfrKey(state)
+    local phase = self:_currentPhase(state)
+    local dist = math.floor(math.abs((state.ox or 0) - (state.px or 0)) / 20)
+    local adv = (state.frame_advantage or 0) > 0 and "plus" or "minus"
+    return string.format("%s|%s|%d", phase, adv, dist)
 end
 
 function AI:_advanceAir(state)
@@ -1582,6 +1186,9 @@ function AI:_advanceAir(state)
             state.p_airborne = false
         end
     end
+    self.blueprint.updates = self.blueprint.updates + count
+    self.logs.blueprint[#self.logs.blueprint + 1] = { frame = self.frame, updates = count }
+    return { updates = count }
 end
 
 function AI:_resolveSingleHit(attacker, defender, attack_move, state)
@@ -1703,21 +1310,9 @@ function AI:loadWorldModel(weights)
     if not model and type(rawget(_G, "WORLD_MODEL_WEIGHTS")) == "table" then
         model = _G.WORLD_MODEL_WEIGHTS
     end
-
     if not model then
-        local d = self.config.world_model.feature_dim or 20
-        local h = self.config.world_model.hidden_dim or 24
-        model = { W1 = {}, b1 = {}, W2 = {}, b2 = {} }
-        for i = 1, d do
-            model.W1[i] = {}
-            for j = 1, h do model.W1[i][j] = (self.rng() * 2 - 1) * 0.015 end
-        end
-        for j = 1, h do
-            model.b1[j] = 0
-            model.W2[j] = {}
-            for k = 1, d do model.W2[j][k] = (self.rng() * 2 - 1) * 0.015 end
-        end
-        for k = 1, d do model.b2[k] = 0 end
+        self.world_model_loaded = false
+        return false
     end
 
     self.world_model = deepcopy(model)
@@ -1763,27 +1358,13 @@ function AI:_worldModelStep(state, action, opp_action)
     local d = math.min(#x, self.config.world_model.feature_dim or #x)
 
     local y = {}
-    if m.W1 and m.W2 then
-        local h = {}
-        for j = 1, #(m.W1[1] or {}) do
-            local z = (m.b1 and m.b1[j]) or 0
-            for i = 1, d do z = z + ((m.W1[i] and m.W1[i][j]) or 0) * (x[i] or 0) end
-            h[j] = math.tanh(z)
-        end
-        for k = 1, d do
-            local z2 = (m.b2 and m.b2[k]) or 0
-            for j = 1, #h do z2 = z2 + ((m.W2[j] and m.W2[j][k]) or 0) * h[j] end
-            y[k] = math.tanh(z2)
-        end
-    else
-        local W = m.W or {}
-        local b = m.b or {}
-        for i = 1, d do
-            local acc = b[i] or 0
-            local row = W[i] or {}
-            for j = 1, d do acc = acc + (row[j] or 0) * (x[j] or 0) end
-            y[i] = math.tanh(acc)
-        end
+    local W = m.W or {}
+    local b = m.b or {}
+    for i = 1, d do
+        local acc = b[i] or 0
+        local row = W[i] or {}
+        for j = 1, d do acc = acc + (row[j] or 0) * (x[j] or 0) end
+        y[i] = math.tanh(acc)
     end
 
     local nxt = deepcopy(state)
@@ -1798,52 +1379,6 @@ function AI:_worldModelStep(state, action, opp_action)
     nxt.o_hitstun = clamp((state.o_hitstun or 0) + (y[18] or 0) * 2, 0, 30)
     nxt.uncertainty = clamp(0.7 * (state.uncertainty or self.config.observation_noise) + 0.3 * math.abs(y[7] or 0), 0, 1)
     return nxt
-end
-
-function AI:trainWorldModelFromLogs(opts)
-    if not (self.world_model and self.config.world_model.train_on_logs) then return { updates = 0, loss = 0 } end
-    local o = opts or {}
-    local limit = o.limit or 256
-    local lr = o.lr or 0.0005
-    local start_i = math.max(2, #self.logs.training_samples - limit + 1)
-    local updates, total_loss = 0, 0
-
-    for i = start_i, #self.logs.training_samples do
-        local prev = self.logs.training_samples[i - 1]
-        local cur = self.logs.training_samples[i]
-        if prev and cur and prev.state and cur.state then
-            local a = prev.chosen_action or "idle"
-            local b = cur.observed_player_action or "idle"
-            local x = self:_encodeWorldInput(prev.state, a, b)
-            local target = self:_encodeWorldInput(cur.state, a, b)
-            local pred = self:_worldModelStep(prev.state, a, b)
-            local y = self:_encodeWorldInput(pred, a, b)
-            local d = math.min(#x, #y)
-            local err = 0
-            for k = 1, d do
-                local e = (target[k] or 0) - (y[k] or 0)
-                err = err + e * e
-            end
-            total_loss = total_loss + err / math.max(1, d)
-
-            if self.world_model.W2 and self.world_model.W1 then
-                for j = 1, #(self.world_model.W2 or {}) do
-                    local row = self.world_model.W2[j]
-                    for k = 1, math.min(#row, d) do
-                        row[k] = row[k] + lr * ((target[k] or 0) - (y[k] or 0)) * 0.1
-                    end
-                end
-            end
-            updates = updates + 1
-        end
-    end
-
-    if updates > 0 then
-        self.world_model_stats.train_steps = (self.world_model_stats.train_steps or 0) + updates
-        self.world_model_stats.train_loss = 0.9 * (self.world_model_stats.train_loss or (total_loss / updates)) + 0.1 * (total_loss / updates)
-        self.logs.rl[#self.logs.rl + 1] = { frame = self.frame, type = "world_model_train", updates = updates, loss = total_loss / updates }
-    end
-    return { updates = updates, loss = updates > 0 and (total_loss / updates) or 0 }
 end
 
 function AI:_predictFrames(base_state, action, opp_action, frames)
@@ -1951,20 +1486,6 @@ function AI:_policyPrior(state, action)
     if self.nn and self.config.hybrid.critic_enabled and self.nn.policy_w then
         base = base + 0.02
     end
-
-    local _, f = self:evaluateState(state)
-    local bp_pol = self:_blueprintForward(f)
-    if bp_pol and bp_pol[action] then
-        local pb = clamp(self.config.blueprint.blend_policy or 0.7, 0, 1)
-        base = (1 - pb) * base + pb * bp_pol[action]
-    end
-
-    local cfr = self:_cfrSolveSubgame(state)
-    if cfr and cfr[action] then
-        local cb = clamp(self.config.cfr.mix_strength or 0.45, 0, 1)
-        base = (1 - cb) * base + cb * cfr[action]
-    end
-
     return clamp(base, 0.01, 0.9)
 end
 
@@ -2082,8 +1603,6 @@ function AI:_predictOpponentBranches(obs)
     end
 
     local phase = self:_currentPhase(obs)
-    local cls, cls_conf = self:_strategyFingerprint()
-    local op_net = self:_opponentPolicyPrior(obs)
     local candidates = { "light", "block", "walk_back", "jump", "throw" }
     local branches = {}
     local total = 0
@@ -2094,13 +1613,6 @@ function AI:_predictOpponentBranches(obs)
         branches[#branches + 1] = { action = a, p = c }
     end
     for _, b in ipairs(branches) do b.p = b.p / math.max(total, 1e-6) end
-    if op_net then
-        local ob = clamp(self.config.opponent_policy_net.blend or 0.5, 0, 1)
-        for _, b in ipairs(branches) do
-            local pp = op_net[b.action] or 0.2
-            b.p = (1 - ob) * b.p + ob * pp
-        end
-    end
 
     local p_jump = self:_bayesMean(self.belief.bayes.jump_after_block_light)
     local cm = self.player_model.conditioning_memory
@@ -2133,17 +1645,8 @@ function AI:_predictOpponentBranches(obs)
     for _, b in ipairs(branches) do sum2 = sum2 + b.p end
     for _, b in ipairs(branches) do b.p = b.p / math.max(sum2, 1e-6) end
 
-    if cls == "rushdown" then
-        for _, b in ipairs(branches) do if b.action == "light" or b.action == "throw" then b.p = b.p * (1 + 0.2 * cls_conf) end end
-    elseif cls == "turtling" then
-        for _, b in ipairs(branches) do if b.action == "block" or b.action == "walk_back" then b.p = b.p * (1 + 0.2 * cls_conf) end end
-    end
-    local sum3 = 0
-    for _, b in ipairs(branches) do sum3 = sum3 + b.p end
-    for _, b in ipairs(branches) do b.p = b.p / math.max(sum3, 1e-6) end
-
     local conf = clamp(0.25 + 0.75 * (self.belief.confidence or 0.5), 0.1, 0.95)
-    return branches, { confidence = conf, reason = "genbr_persona_bayes", persona = persona, strategy_class = cls }
+    return branches, { confidence = conf, reason = "genbr_persona_bayes", persona = persona }
 end
 
 function AI:_pruneAction(state, action)
@@ -2165,27 +1668,6 @@ function AI:_pruneAction(state, action)
     return false, ""
 end
 
-function AI:_ttStore(key, effective_depth, best_val, bound, best_action)
-    if not self.config.ablations.transposition then return end
-    self.transposition_age = (self.transposition_age or 0) + 1
-    local max_entries = self.config.self_improvement.tt_max_entries or 120000
-    local n = 0
-    for _ in pairs(self.transposition) do n = n + 1 end
-    if n > max_entries then
-        local purge_before = self.transposition_age - 2000
-        for k, v in pairs(self.transposition) do
-            if (v.age or 0) < purge_before then self.transposition[k] = nil end
-        end
-    end
-    self.transposition[key] = {
-        eval = best_val,
-        depth = effective_depth,
-        bound = bound,
-        best_action = best_action,
-        age = self.transposition_age
-    }
-end
-
 function AI:_moveOrderHeuristic(state, action, depth)
     local score = 0
     if action == "special" then score = score + 90 end
@@ -2196,7 +1678,7 @@ function AI:_moveOrderHeuristic(state, action, depth)
 
     local fd = FRAME_DATA[action] or FRAME_DATA.idle
     if fd.on_block and fd.on_block > -4 then score = score + 20 end
-    if has_entries(fd.cancel) then score = score + 15 end
+    if fd.cancel and #fd.cancel > 0 then score = score + 15 end
 
     score = score + (self.history_heuristic[action] or 0)
     local killers = self.killer_moves[depth]
@@ -2284,7 +1766,7 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
         local bound = "exact"
         if best_val <= original_alpha then bound = "upper" end
         if best_val >= beta then bound = "lower" end
-        self:_ttStore(key, effective_depth, best_val, bound, best_action)
+        self.transposition[key] = { eval = best_val, depth = effective_depth, bound = bound, best_action = best_action }
     end
 
     if depth == root_depth then return best_val, best_action, moves end
@@ -2297,13 +1779,6 @@ function AI:_openingBookAction(obs)
     local dist = math.abs((obs.ox or 0) - (obs.px or 0))
     local bucket = (dist > 180 and "far") or (dist > 70 and "mid") or "close"
     local seq = self.opening_book[string.format("neutral|%s", bucket)]
-    if (not seq or #seq == 0) and self.dataset_priors.situations and self.dataset_priors.situations.scramble then
-        local pri = self.dataset_priors.situations.scramble
-        if #pri > 0 then
-            local row = pri[((math.floor(self.frame / 30)) % #pri) + 1]
-            if row and row.action then return row.action end
-        end
-    end
     if not seq or #seq == 0 then return nil end
     return seq[((math.floor(self.frame / 30)) % #seq) + 1]
 end
@@ -2519,13 +1994,9 @@ function AI:_planAction(obs, layer_state)
     local cached = self:_cachedInstinct(obs)
     local epi_mode = self:_epistemicMode()
     local degrade_mode = self:_gracefulDegradationMode(obs)
-    local root_preview = self:_initSimState(obs)
-    local _, f_preview = self:evaluateState(root_preview)
-    local timing_delay = self:_timingDelay(f_preview)
 
     if self:_certaintyGate(obs) and volatility < self.config.self_improvement.volatility_trigger and cached then
-        return cached, { score = 0, reason = "certainty_gate_cached", top = { cached }, action_confidence = 0.92, volatility = volatility, epistemic_mode = epi_mode,
-        timing_delay = timing_delay }
+        return cached, { score = 0, reason = "certainty_gate_cached", top = { cached }, action_confidence = 0.92, volatility = volatility, epistemic_mode = epi_mode }
     end
 
     if degrade_mode == "fundamentals" then
@@ -2564,15 +2035,7 @@ function AI:_planAction(obs, layer_state)
         local deadline = now_ms() + budget
         local depth = math.max(2, self.config.max_rollout_depth)
         local ordered_moves
-        if self.config.multires_search.enabled then
-            local shortlist = self:_multiresCandidates(root, deadline)
-            local saved = self._multires_shortlist
-            self._multires_shortlist = shortlist
-            score, best_action, ordered_moves = self:_negaExpectimax(root, math.max(depth, self.config.multires_search.fine_depth), -1e9, 1e9, deadline, depth)
-            self._multires_shortlist = saved
-        else
-            score, best_action, ordered_moves = self:_negaExpectimax(root, depth, -1e9, 1e9, deadline, depth)
-        end
+        score, best_action, ordered_moves = self:_negaExpectimax(root, depth, -1e9, 1e9, deadline, depth)
         top = ordered_moves or { best_action or "idle" }
     end
 
@@ -2746,23 +2209,12 @@ end
 
 function AI:_updateOpponentIdentity(player_id)
     local id = player_id or "default"
-    local fp = self.cross_match_memory.opponent_fingerprints[id] or { matches = 0, aggression = 0.5, adaptation_speed = 0.5, panic = 0.5, archetype = "balanced" }
+    local fp = self.cross_match_memory.opponent_fingerprints[id] or { matches = 0, aggression = 0.5, adaptation_speed = 0.5, panic = 0.5 }
     fp.matches = fp.matches + 1
     fp.aggression = 0.85 * fp.aggression + 0.15 * (self.player_model.style.aggression or 0.5)
     fp.adaptation_speed = 0.85 * fp.adaptation_speed + 0.15 * (self.cross_match_memory.adaptation_speed["light"] or 0.5)
     fp.panic = 0.85 * fp.panic + 0.15 * (self.player_model.style.panic_reversal or 0.5)
-
-    local cents = self.cross_match_memory.archetype_centroids or {}
-    local best_name, best_dist = "balanced", 1e9
-    for name, c in pairs(cents) do
-        local d = math.abs(fp.aggression - (c.aggression or 0.5))
-            + math.abs(fp.adaptation_speed - (c.adaptation_speed or 0.5))
-            + math.abs(fp.panic - (c.panic or 0.5))
-        if d < best_dist then best_dist = d; best_name = name end
-    end
-    fp.archetype = best_name
     self.cross_match_memory.opponent_fingerprints[id] = fp
-    self.logs.belief[#self.logs.belief + 1] = { frame = self.frame, opponent_id = id, archetype = best_name, aggression = fp.aggression, adapt = fp.adaptation_speed, panic = fp.panic }
 end
 
 function AI:_detectStrategicBoredom()
@@ -2892,7 +2344,7 @@ function AI:_logDecision(obs, action, meta)
         reaction_delay_frames = self.config.reaction_delay_frames,
         match_plan = self.timescale.match_plan
     }
-    self.logs.novelty[#self.logs.novelty + 1] = { novelty_buffer_size = table_size(self.novelty_memory and self.novelty_memory.counts or nil), plan = self.timescale.match_plan }
+    self.logs.novelty[#self.logs.novelty + 1] = { novelty_buffer_size = (self.novelty_memory and #self.novelty_memory) or 0, plan = self.timescale.match_plan }
     self.logs.info_value[#self.logs.info_value + 1] = {
         expected_info = features.info_gain or 0,
         deception_value = features.deception_value or 0,
@@ -2975,15 +2427,6 @@ function AI:update(dt, observed_player_action)
         self:_applyFeaturePruning()
         self:_regressionCheckAndRollback()
         self:_runStrategyTournament()
-        if self.blueprint and self.blueprint.enabled then
-            self:trainBlueprintFromDeepSearch(128)
-        end
-        if self.critic and self.critic.enabled then
-            self:trainCriticFromLogs({ epochs = 1, limit = 256 })
-        end
-        if self.config.world_model.enabled and self.config.world_model.train_on_logs then
-            self:trainWorldModelFromLogs({ limit = 256, lr = 0.0005 })
-        end
     end
     self.logs.layered[#self.logs.layered + 1] = {
         frame = self.frame,
@@ -3034,7 +2477,6 @@ end
 function AI:runSelfPlayLeague(total_games, opts)
     local cfg = opts or {}
     local games = math.max(1, total_games or 10000)
-    local episode_frames = cfg.frames or 120
     if #self.league.snapshots == 0 then
         self:recordLeagueSnapshot("baseline_fsm", 1300)
         self:recordLeagueSnapshot("aggressive_bot", 1450)
@@ -3052,23 +2494,12 @@ function AI:runSelfPlayLeague(total_games, opts)
         local persona = self.league.personas[opp] or "balanced"
 
         local obs = self:_observeState()
-        local state = self:_initSimState(obs)
-        for _f = 1, episode_frames do
-            local self_action = self:_planAction(state, { state_label = self:_currentPhase(state), strategic = self.strategic, policy = self:_selectPhasePolicy(self:_currentPhase(state)) })
-            local dist = math.abs((state.ox or 0) - (state.px or 0))
-            local opp_action = "light"
-            if persona == "aggressive" then
-                opp_action = (dist < 70 and "heavy" or "walk_fwd")
-            elseif persona == "defensive" then
-                opp_action = (dist < 55 and "block" or "walk_back")
-            else
-                opp_action = (dist > 140) and "walk_fwd" or AI.baseline_fsm(dist)
-            end
-            state = self:_rolloutState(state, self_action or "idle", opp_action, 1)
-            if (state.p_health or 0) <= 0 or (state.o_health or 0) <= 0 then break end
-        end
+        local root = self:_initSimState(obs)
+        local act_self = self.last_action or "light"
+        local act_opp = (persona == "aggressive") and "heavy" or ((persona == "defensive") and "block" or "light")
+        local end_state = self:_rolloutState(root, act_self, act_opp, cfg.frames or 10)
 
-        local reward = ((state.o_health or 0) - (state.p_health or 0)) / 100
+        local reward = ((end_state.o_health or 0) - (end_state.p_health or 0)) / 100
         reward = self:_personaRewardShape(reward, persona)
         self:recordLeagueResult(opp, reward)
 
@@ -3458,12 +2889,7 @@ function AI:experimentConfig()
         world_model_fallback = self.world_model_stats.fallback,
         learned_critic_enabled = self.critic and self.critic.enabled or false,
         learned_critic_updates = self.critic and self.critic.updates or 0,
-        learned_critic_loss = self.critic and self.critic.last_loss or 0,
-        blueprint_updates = self.blueprint and self.blueprint.updates or 0,
-        cfr_enabled = self.cfr and self.cfr.enabled or false,
-        multires_enabled = self.config.multires_search.enabled,
-        opponent_policy_net_enabled = self.opponent_policy_net and self.opponent_policy_net.enabled or false,
-        risk_adjuster_enabled = self.risk_adjuster and self.risk_adjuster.enabled or false
+        learned_critic_loss = self.critic and self.critic.last_loss or 0
     }
 end
 
