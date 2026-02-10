@@ -1186,6 +1186,9 @@ function AI:_advanceAir(state)
             state.p_airborne = false
         end
     end
+    self.blueprint.updates = self.blueprint.updates + count
+    self.logs.blueprint[#self.logs.blueprint + 1] = { frame = self.frame, updates = count }
+    return { updates = count }
 end
 
 function AI:_resolveSingleHit(attacker, defender, attack_move, state)
