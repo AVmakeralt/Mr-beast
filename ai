@@ -1,0 +1,167 @@
+
+
+-- Constants
+local STATES = {
+    IDLE = "idle",
+    APPROACH = "approach",
+    RETREAT = "retreat",
+    ATTACK = "attack",
+    BLOCK = "block",
+    SPECIAL = "special",
+    RECOVER = "recover"
+}
+
+local ATTACK_TYPES = {
+    LIGHT = "light",
+    HEAVY = "heavy",
+    COMBO = "combo"
+}
+
+-- AI Class
+local AI = {}
+AI.__index = AI
+
+function AI:new(player, opponent)
+    local self = setmetatable({}, AI)
+    self.player = player  -- Reference to the player entity (with position, health, etc.)
+    self.opponent = opponent  -- Reference to the AI opponent entity
+    self.currentState = STATES.IDLE
+    self.stateTimer = 0  -- Timer for state duration
+    self.aggressionLevel = 0.5  -- 0 to 1, how aggressive the AI is (can be adjusted dynamically)
+    self.lastActionTime = 0
+    self.cooldowns = { attack = 0, special = 0 }  -- Cooldown timers
+    return self
+end
+
+-- Helper function: Calculate distance between player and opponent
+function AI:distanceToPlayer()
+    return math.abs(self.player.x - self.opponent.x)  -- Assuming 2D x-axis positions
+end
+
+-- Helper function: Check if player is in attack range
+function AI:inAttackRange(range)
+    return self:distanceToPlayer() <= range
+end
+
+-- Decision-making: Choose next state based on conditions
+function AI:decideNextState(dt)
+    local dist = self:distanceToPlayer()
+    local playerHealth = self.player.health / self.player.maxHealth
+    local oppHealth = self.opponent.health / self.opponent.maxHealth
+
+    -- Adjust aggression based on health difference
+    if oppHealth < playerHealth then
+        self.aggressionLevel = math.min(1, self.aggressionLevel + 0.1)
+    elseif oppHealth > playerHealth then
+        self.aggressionLevel = math.max(0.3, self.aggressionLevel - 0.1)
+    end
+
+    -- Probabilistic decisions
+    local rand = math.random()
+
+    if self.currentState == STATES.IDLE or self.stateTimer <= 0 then
+        if dist > 200 then  -- Far away
+            self.currentState = STATES.APPROACH
+        elseif dist < 50 and rand < self.aggressionLevel then  -- Close and aggressive
+            self.currentState = STATES.ATTACK
+        elseif oppHealth < 0.3 and rand < 0.2 then  -- Low health, chance for special
+            self.currentState = STATES.SPECIAL
+        elseif playerHealth < 0.5 and rand < self.aggressionLevel * 0.5 then  -- Player weak, attack
+            self.currentState = STATES.ATTACK
+        elseif rand < 0.3 then  -- Random retreat
+            self.currentState = STATES.RETREAT
+        elseif rand < 0.6 then  -- Random block
+            self.currentState = STATES.BLOCK
+        else
+            self.currentState = STATES.IDLE
+        end
+        self.stateTimer = math.random(1, 3)  -- Random state duration in seconds
+    end
+
+    -- Update timers
+    self.stateTimer = self.stateTimer - dt
+    for k, v in pairs(self.cooldowns) do
+        self.cooldowns[k] = math.max(0, v - dt)
+    end
+end
+
+-- Execute actions based on current state
+function AI:update(dt)
+    self:decideNextState(dt)
+
+    local now = love.timer.getTime()  -- Assuming Love2D; replace with your timer
+
+    if now - self.lastActionTime < 0.1 then return end  -- Basic rate limiting
+
+    if self.currentState == STATES.APPROACH then
+        self:moveTowardsPlayer()
+    elseif self.currentState == STATES.RETREAT then
+        self:moveAwayFromPlayer()
+    elseif self.currentState == STATES.ATTACK then
+        self:performAttack()
+    elseif self.currentState == STATES.BLOCK then
+        self.opponent.isBlocking = true  -- Set blocking flag
+    elseif self.currentState == STATES.SPECIAL then
+        self:performSpecial()
+    elseif self.currentState == STATES.RECOVER then
+        -- Implement recovery logic, e.g., heal or wait
+    elseif self.currentState == STATES.IDLE then
+        -- Do nothing or animate idle
+    end
+
+    self.lastActionTime = now
+end
+
+-- Movement functions
+function AI:moveTowardsPlayer()
+    if self.player.x > self.opponent.x then
+        self.opponent:moveRight()  -- Assume methods like moveRight() on entity
+    else
+        self.opponent:moveLeft()
+    end
+end
+
+function AI:moveAwayFromPlayer()
+    if self.player.x > self.opponent.x then
+        self.opponent:moveLeft()
+    else
+        self.opponent:moveRight()
+    end
+end
+
+-- Attack logic with variety
+function AI:performAttack()
+    if self.cooldowns.attack > 0 then return end
+
+    local attackType = ATTACK_TYPES.LIGHT
+    local rand = math.random()
+
+    if self.aggressionLevel > 0.7 and rand < 0.4 then
+        attackType = ATTACK_TYPES.HEAVY
+    elseif self.aggressionLevel > 0.5 and rand < 0.6 then
+        attackType = ATTACK_TYPES.COMBO
+    end
+
+    -- Execute attack (assume methods on opponent entity)
+    if attackType == ATTACK_TYPES.LIGHT and self:inAttackRange(50) then
+        self.opponent:lightAttack()
+    elseif attackType == ATTACK_TYPES.HEAVY and self:inAttackRange(70) then
+        self.opponent:heavyAttack()
+    elseif attackType == ATTACK_TYPES.COMBO and self:inAttackRange(50) then
+        self.opponent:comboAttack()
+    end
+
+    self.cooldowns.attack = 1 + math.random()  -- Random cooldown 1-2 seconds
+end
+
+-- Special move logic
+function AI:performSpecial()
+    if self.cooldowns.special > 0 then return end
+
+    if self:inAttackRange(100) and self.opponent.specialMeter >= 50 then  -- Assume special meter
+        self.opponent:specialAttack()
+        self.cooldowns.special = 10  -- Long cooldown
+    end
+end
+
+-- 
