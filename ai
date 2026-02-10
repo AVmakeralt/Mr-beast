@@ -145,7 +145,16 @@ local DEFAULT_CONFIG = {
         simulations = 1024,
         c_puct = 1.8,
         rollout_frames = 8,
-        temperature = 0.0
+        temperature = 0.0,
+        progressive_widening = true,
+        widening_exponent = 1.2,
+        widening_base = 2,
+        forced_playouts = 10,
+        virtual_loss = 2.0,
+        root_reuse_decay = 0.99,
+        rollout_cache_size = 1500,
+        temperature_min = 0.0,
+        temperature_decay = 0.995
     },
 
     world_model = {
@@ -154,6 +163,18 @@ local DEFAULT_CONFIG = {
         use_for_search = true,
         uncertainty_mix = 0.35,
         feature_dim = 20
+    },
+
+    muzero = {
+        enabled = true,
+        latent_dim = 16,
+        unroll_steps = 8,
+        value_blend = 0.35,
+        policy_blend = 0.25,
+        dirichlet_alpha = 0.3,
+        dirichlet_eps = 0.25,
+        replay_size = 12000,
+        learning_rate = 0.0007
     },
 
     self_improvement = {
@@ -302,6 +323,13 @@ function AI:new(player, opponent, config)
     self.transposition = {}
     self.history_heuristic = {}
     self.killer_moves = {}
+    self.rave_stats = {}
+    self.mcts_root_cache = nil
+    self.mcts_graph = {}
+    self.rollout_cache = {}
+    self.rollout_cache_order = {}
+    self.prev_root_score = 0
+
 
     self.fairness = {
         information_parity = true,
@@ -375,6 +403,9 @@ function AI:new(player, opponent, config)
     self.world_model = nil
     self.world_model_loaded = false
     self.world_model_stats = { calls = 0, fallback = 0 }
+    self.muzero = nil
+    self.muzero_replay = {}
+    self.muzero_stats = { updates = 0, last_loss = 0 }
     self.causal_trace = {}
     self.opponent_shaping = { revealed_weakness = false, bait_window = 0, conditioned = 0 }
 
@@ -409,7 +440,8 @@ function AI:new(player, opponent, config)
         degradation = {},
         shaping = {},
         benchmarks = {},
-        rl = {}
+        rl = {},
+        muzero = {}
     }
 
     self.learning = {
@@ -1311,13 +1343,261 @@ function AI:loadWorldModel(weights)
         model = _G.WORLD_MODEL_WEIGHTS
     end
     if not model then
-        self.world_model_loaded = false
-        return false
+        local d = self.config.world_model.feature_dim or 20
+        model = { W = {}, b = {} }
+        for i = 1, d do
+            model.W[i] = {}
+            for j = 1, d do
+                model.W[i][j] = (i == j) and 0.015 or 0
+            end
+            model.b[i] = 0
+        end
     end
 
     self.world_model = deepcopy(model)
     self.world_model_loaded = true
     return true
+end
+
+function AI:_initMuZeroModel()
+    if self.muzero then return self.muzero end
+
+    local md = self.config.muzero.latent_dim or 16
+    local m = {
+        repr_w = {}, repr_b = {},
+        dyn_state_w = {}, dyn_reward_w = {}, dyn_b = {},
+        val_w = {}, val_b = 0,
+        policy_w = {}, policy_b = {}
+    }
+
+    for i = 1, md do
+        m.repr_w[i] = {}
+        m.repr_b[i] = 0
+        m.dyn_state_w[i] = {}
+        m.dyn_reward_w[i] = 0
+        m.dyn_b[i] = 0
+        m.val_w[i] = (self.rng() * 2 - 1) * 0.08
+        for j = 1, 20 do
+            m.repr_w[i][j] = (self.rng() * 2 - 1) * 0.05
+        end
+        for j = 1, md + #ACTIONS * 2 do
+            m.dyn_state_w[i][j] = (self.rng() * 2 - 1) * 0.04
+        end
+        m.dyn_reward_w[i] = (self.rng() * 2 - 1) * 0.03
+    end
+
+    for _, a in ipairs(ACTIONS) do
+        m.policy_w[a] = {}
+        m.policy_b[a] = 0
+        for i = 1, md do m.policy_w[a][i] = (self.rng() * 2 - 1) * 0.08 end
+    end
+
+    self.muzero = m
+    return m
+end
+
+function AI:_muzeroRepresent(state)
+    if not self.config.muzero.enabled then return nil end
+    local m = self:_initMuZeroModel()
+    local x = self:_encodeWorldInput(state, "idle", "idle")
+    local z = {}
+    for i = 1, (self.config.muzero.latent_dim or 16) do
+        local acc = m.repr_b[i] or 0
+        local row = m.repr_w[i] or {}
+        for j = 1, math.min(20, #x) do acc = acc + (row[j] or 0) * (x[j] or 0) end
+        z[i] = math.tanh(acc)
+    end
+    return z
+end
+
+function AI:_muzeroPredict(latent)
+    if not latent then return nil end
+    local m = self:_initMuZeroModel()
+    local val = m.val_b or 0
+    for i = 1, #latent do val = val + (m.val_w[i] or 0) * (latent[i] or 0) end
+    val = math.tanh(val)
+
+    local logits = {}
+    local max_l = -1e9
+    for _, a in ipairs(ACTIONS) do
+        local s = m.policy_b[a] or 0
+        local wa = m.policy_w[a] or {}
+        for i = 1, #latent do s = s + (wa[i] or 0) * (latent[i] or 0) end
+        logits[a] = s
+        if s > max_l then max_l = s end
+    end
+
+    local denom = 0
+    for _, a in ipairs(ACTIONS) do
+        logits[a] = math.exp((logits[a] or 0) - max_l)
+        denom = denom + logits[a]
+    end
+    local policy = {}
+    for _, a in ipairs(ACTIONS) do policy[a] = (logits[a] or 0) / math.max(1e-6, denom) end
+
+    return val, policy
+end
+
+function AI:_muzeroDynamics(latent, action, opp_action)
+    if not latent then return nil, 0 end
+    local m = self:_initMuZeroModel()
+    local inp = {}
+    for i = 1, #latent do inp[#inp + 1] = latent[i] or 0 end
+    for _, a in ipairs(ACTIONS) do inp[#inp + 1] = (a == action and 1 or 0) end
+    for _, a in ipairs(ACTIONS) do inp[#inp + 1] = (a == opp_action and 1 or 0) end
+
+    local nxt, reward = {}, 0
+    for i = 1, #latent do
+        local acc = m.dyn_b[i] or 0
+        local row = m.dyn_state_w[i] or {}
+        for j = 1, #inp do acc = acc + (row[j] or 0) * (inp[j] or 0) end
+        nxt[i] = math.tanh(acc)
+        reward = reward + (m.dyn_reward_w[i] or 0) * nxt[i]
+    end
+    reward = math.tanh(reward)
+    return nxt, reward
+end
+
+function AI:_muzeroInference(state, action, opp_action)
+    if not self.config.muzero.enabled then return nil end
+    local z = self:_muzeroRepresent(state)
+    if action then z = select(1, self:_muzeroDynamics(z, action, opp_action or "idle")) end
+    local v, p = self:_muzeroPredict(z)
+    return { latent = z, value = v or 0, policy = p or {} }
+end
+
+function AI:_storeMuZeroTransition(state, action, opp_action, next_state, reward, policy_target)
+    if not self.config.muzero.enabled then return end
+    local r = self.muzero_replay
+    local pt = {}
+    if type(policy_target) == "table" then
+        local sum = 0
+        for _, a in ipairs(ACTIONS) do
+            local v = tonumber(policy_target[a]) or 0
+            pt[a] = math.max(0, v)
+            sum = sum + pt[a]
+        end
+        if sum > 0 then
+            for _, a in ipairs(ACTIONS) do pt[a] = pt[a] / sum end
+        else
+            for _, a in ipairs(ACTIONS) do pt[a] = 1 / #ACTIONS end
+        end
+    else
+        for _, a in ipairs(ACTIONS) do pt[a] = (a == (action or "idle")) and 1 or 0 end
+    end
+
+    r[#r + 1] = {
+        s = deepcopy(state),
+        a = action or "idle",
+        oa = opp_action or "idle",
+        ns = deepcopy(next_state),
+        reward = clamp(reward or 0, -1, 1),
+        policy_target = pt
+    }
+    local cap = self.config.muzero.replay_size or 12000
+    if #r > cap then table.remove(r, 1) end
+end
+
+function AI:trainMuZeroFromReplay(opts)
+    if not self.config.muzero.enabled then return { updates = 0, loss = 0, enabled = false } end
+    local cfg = opts or {}
+    local epochs = cfg.epochs or 1
+    local batch = cfg.batch_size or 64
+    local lr = cfg.lr or self.config.muzero.learning_rate or 0.0007
+    local replay = self.muzero_replay or {}
+    if #replay == 0 then return { updates = 0, loss = 0, enabled = true, empty = true } end
+
+    local m = self:_initMuZeroModel()
+    local total_loss, n = 0, 0
+    local unroll = math.max(1, self.config.muzero.unroll_steps or 1)
+
+    for _ = 1, epochs do
+        for _ = 1, math.min(batch, #replay) do
+            local idx = math.floor(self.rng() * #replay) + 1
+            local smp = replay[idx]
+            local z = self:_muzeroRepresent(smp.s)
+
+            local p_target = smp.policy_target or {}
+            local p_sum = 0
+            for _, a in ipairs(ACTIONS) do p_sum = p_sum + (p_target[a] or 0) end
+            if p_sum <= 0 then
+                for _, a in ipairs(ACTIONS) do p_target[a] = (a == smp.a) and 1 or 0 end
+                p_sum = 1
+            end
+            for _, a in ipairs(ACTIONS) do p_target[a] = (p_target[a] or 0) / p_sum end
+
+            local v_pred, p_pred = self:_muzeroPredict(z)
+            local v_tgt = math.tanh((self:evaluateState(smp.ns) or 0) / 100)
+            local value_err = (v_tgt - (v_pred or 0))
+
+            local v_raw = m.val_b or 0
+            for i = 1, #z do v_raw = v_raw + (m.val_w[i] or 0) * (z[i] or 0) end
+            local dv = value_err * (1 - math.tanh(v_raw)^2)
+            for i = 1, #z do
+                m.val_w[i] = (m.val_w[i] or 0) + lr * dv * (z[i] or 0)
+            end
+            m.val_b = (m.val_b or 0) + lr * dv
+
+            local p_loss = 0
+            for _, a in ipairs(ACTIONS) do
+                local pe = (p_target[a] or 0) - (p_pred[a] or 0)
+                p_loss = p_loss + pe * pe
+                local wa = m.policy_w[a] or {}
+                for i = 1, #z do wa[i] = (wa[i] or 0) + lr * pe * (z[i] or 0) end
+                m.policy_w[a] = wa
+                m.policy_b[a] = (m.policy_b[a] or 0) + lr * pe
+            end
+
+            local dyn_loss = 0
+            local reward_loss = 0
+            local z_step = z
+            for k = 0, unroll - 1 do
+                local step = replay[math.min(#replay, idx + k)]
+                if not step then break end
+
+                local z_next_pred, r_pred = self:_muzeroDynamics(z_step, step.a, step.oa)
+                local z_tgt = self:_muzeroRepresent(step.ns)
+                local r_tgt = step.reward or 0
+                local reward_err = r_tgt - (r_pred or 0)
+
+                local inp = {}
+                for i = 1, #z_step do inp[#inp + 1] = z_step[i] or 0 end
+                for _, a in ipairs(ACTIONS) do inp[#inp + 1] = (step.a == a and 1 or 0) end
+                for _, a in ipairs(ACTIONS) do inp[#inp + 1] = (step.oa == a and 1 or 0) end
+
+                local r_raw = 0
+                for i = 1, #z_next_pred do r_raw = r_raw + (m.dyn_reward_w[i] or 0) * (z_next_pred[i] or 0) end
+                local dr = reward_err * (1 - math.tanh(r_raw)^2)
+
+                for i = 1, #z_step do
+                    m.dyn_reward_w[i] = (m.dyn_reward_w[i] or 0) + lr * dr * (z_next_pred[i] or 0)
+                    local latent_err = ((z_tgt[i] or 0) - (z_next_pred[i] or 0))
+                    dyn_loss = dyn_loss + math.abs(latent_err)
+                    local row = m.dyn_state_w[i] or {}
+                    local zraw = m.dyn_b[i] or 0
+                    for j = 1, #inp do zraw = zraw + (row[j] or 0) * (inp[j] or 0) end
+                    local dz = latent_err * (1 - math.tanh(zraw)^2)
+                    for j = 1, #inp do row[j] = (row[j] or 0) + lr * dz * (inp[j] or 0) end
+                    m.dyn_state_w[i] = row
+                    m.dyn_b[i] = (m.dyn_b[i] or 0) + lr * dz
+                end
+
+                reward_loss = reward_loss + reward_err * reward_err
+                z_step = z_next_pred
+            end
+
+            dyn_loss = dyn_loss / math.max(1, unroll * #z)
+            local loss = value_err * value_err + reward_loss / math.max(1, unroll) + p_loss / math.max(1, #ACTIONS) + dyn_loss
+            total_loss = total_loss + loss
+            n = n + 1
+        end
+    end
+
+    self.muzero_stats.updates = (self.muzero_stats.updates or 0) + n
+    self.muzero_stats.last_loss = (n > 0) and (total_loss / n) or 0
+    self.logs.muzero[#self.logs.muzero + 1] = { frame = self.frame, updates = n, loss = self.muzero_stats.last_loss, replay = #replay, unroll = unroll }
+
+    return { updates = n, loss = self.muzero_stats.last_loss, replay = #replay, enabled = true, unroll = unroll }
 end
 
 function AI:_encodeWorldInput(state, action, opp_action)
@@ -1477,6 +1757,80 @@ function AI:_legalActionSet(state)
     return out
 end
 
+function AI:_ngramActionBias(action, phase)
+    local st = self.player_model.short_term_window or {}
+    local n = #st
+    if n < 2 then return 1.0 end
+
+    local ngram_matches = 0
+    local total_matches = 0
+    local ctx1 = st[n] or "idle"
+    local ctx2 = st[n - 1] or "idle"
+
+    for i = 3, n do
+        if st[i - 1] == ctx1 then
+            total_matches = total_matches + 1
+            if st[i] == action then ngram_matches = ngram_matches + 1 end
+        end
+        if st[i - 2] == ctx2 and st[i - 1] == ctx1 then
+            total_matches = total_matches + 1
+            if st[i] == action then ngram_matches = ngram_matches + 1 end
+        end
+    end
+
+    local cond_key = string.format("%s|%s|%s", self.last_action or "idle", phase or "neutral", action)
+    local cond = self.player_model.conditional[cond_key] or 0
+    local long = self.player_model.long_term_counts[action] or 0
+
+    local freq = (ngram_matches + 0.35 * cond + 0.2 * long + 1.0) / math.max(1.0, (total_matches + 0.35 * cond + 0.2 * long + #ACTIONS))
+    return clamp(0.7 + 2.0 * freq, 0.65, 1.55)
+end
+
+function AI:_mctsDecayTree(node, factor, depth, max_depth)
+    if not node then return end
+    local d = depth or 0
+    local md = max_depth or 2
+    local f = factor or 0.9
+
+    node.N = math.max(0, (node.N or 0) * f)
+    node.W = (node.W or 0) * f
+    if d >= md then return end
+    for _, child in pairs(node.children or {}) do
+        self:_mctsDecayTree(child, f, d + 1, md)
+    end
+end
+
+function AI:_iterativeDeepeningSearch(root, max_depth, deadline)
+    local best_score, best_action = -1e9, "idle"
+    local best_moves = { "idle" }
+    local asp_window = 35
+
+    for d = 2, math.max(2, max_depth) do
+        if now_ms() > deadline then break end
+
+        local alpha, beta = -1e9, 1e9
+        if d > 2 then
+            alpha = best_score - asp_window
+            beta = best_score + asp_window
+        end
+
+        local score, action, moves = self:_negaExpectimax(deepcopy(root), d, alpha, beta, deadline, d)
+        if score <= alpha or score >= beta then
+            score, action, moves = self:_negaExpectimax(deepcopy(root), d, -1e9, 1e9, deadline, d)
+            asp_window = math.min(200, asp_window * 1.35)
+        else
+            asp_window = math.max(20, asp_window * 0.95)
+        end
+
+        if action then
+            best_score, best_action = score, action
+            best_moves = moves or best_moves
+        end
+    end
+
+    return best_score, best_action, best_moves
+end
+
 function AI:_policyPrior(state, action)
     local base = 0.1
     if action == "light" then base = base + 0.18 end
@@ -1486,7 +1840,22 @@ function AI:_policyPrior(state, action)
     if self.nn and self.config.hybrid.critic_enabled and self.nn.policy_w then
         base = base + 0.02
     end
-    return clamp(base, 0.01, 0.9)
+
+    local phase = self:_currentPhase(state)
+    local ngram_bias = self:_ngramActionBias(action, phase)
+    local confidence = self.player_model.confidence[action] or 0.5
+    base = base * ngram_bias * (0.85 + 0.3 * confidence)
+
+    if self.config.muzero.enabled then
+        local inf = self:_muzeroInference(state)
+        if inf and inf.policy then
+            local p = inf.policy[action] or (1 / math.max(1, #ACTIONS))
+            local pb = clamp(self.config.muzero.policy_blend or 0.25, 0, 0.7)
+            base = (1 - pb) * base + pb * p
+        end
+    end
+
+    return clamp(base, 0.01, 0.95)
 end
 
 function AI:_applyActionOrMacro(state, action, opp_action, frames)
@@ -1505,30 +1874,49 @@ end
 
 function AI:_mctsValue(state)
     local v = self:evaluateState(state)
-    return math.tanh(v / 100)
-end
-
-function AI:_mctsSelectChild(node)
-    local best, best_score = nil, -1e9
-    local total = math.max(1, node.N)
-    for _, child in pairs(node.children) do
-        local q = (child.N > 0) and (child.W / child.N) or 0
-        local u = self.config.mcts.c_puct * child.P * math.sqrt(total) / (1 + child.N)
-        local score = q + u
-        if score > best_score then best, best_score = child, score end
-    end
-    return best
-end
-
-function AI:_mctsExpand(node)
-    if node.expanded then return end
-    local legal = self:_legalActionSet(node.state)
-    for _, a in ipairs(legal) do
-        local pruned = false
-        if not tostring(a):match("^macro:") then
-            pruned = self:_pruneAction(node.state, a)
+    local base = math.tanh(v / 100)
+    if self.config.muzero.enabled then
+        local inf = self:_muzeroInference(state)
+        if inf then
+            local blend = clamp(self.config.muzero.value_blend or 0.35, 0, 0.8)
+            base = (1 - blend) * base + blend * (inf.value or 0)
         end
-        if not pruned then
+    end
+    return base
+end
+
+function AI:_graphStatsForNode(node)
+    if not node then return nil end
+    if node.graph_key and self.mcts_graph[node.graph_key] then
+        return self.mcts_graph[node.graph_key]
+    end
+    return nil
+end
+
+function AI:_graphAwareQ(node)
+    local gs = self:_graphStatsForNode(node)
+    if gs and gs.N and gs.N > 0 then return gs.W / gs.N end
+    if node.N > 0 then return node.W / node.N end
+    return 0
+end
+
+function AI:_mctsWidenLimit(depth, visits)
+    if not self.config.mcts.progressive_widening then return self.config.max_branching end
+    local exp = self.config.mcts.widening_exponent or 1.2
+    local base = self.config.mcts.widening_base or 2
+    local by_depth = math.max(2, math.floor(math.pow(math.max(1, depth), exp)))
+    local by_visits = math.max(2, math.floor(math.pow(math.max(1, visits or 1), 0.5)))
+    return math.max(base, math.min(self.config.max_branching, math.max(by_depth, by_visits)))
+end
+
+function AI:_mctsMaybeWiden(node, depth)
+    if not node or not node.unexpanded_actions then return end
+    local allowed = self:_mctsWidenLimit(depth or 1, node.N or 1)
+    local cur = 0
+    for _ in pairs(node.children or {}) do cur = cur + 1 end
+    while cur < allowed and #node.unexpanded_actions > 0 do
+        local a = table.remove(node.unexpanded_actions, 1)
+        if not node.children[a] then
             node.children[a] = {
                 parent = node,
                 action = a,
@@ -1537,17 +1925,103 @@ function AI:_mctsExpand(node)
                 W = 0,
                 P = self:_policyPrior(node.state, a),
                 expanded = false,
-                children = {}
+                children = {},
+                unexpanded_actions = nil,
+                vloss = 0
             }
+            cur = cur + 1
         end
     end
+end
+
+function AI:_rolloutCacheGet(key)
+    local c = self.rollout_cache[key]
+    if not c then return nil end
+    return deepcopy(c)
+end
+
+function AI:_rolloutCachePut(key, state)
+    if not key then return end
+    local maxn = self.config.mcts.rollout_cache_size or 1500
+    if not self.rollout_cache[key] then
+        self.rollout_cache_order[#self.rollout_cache_order + 1] = key
+    end
+    self.rollout_cache[key] = deepcopy(state)
+    while #self.rollout_cache_order > maxn do
+        local old = table.remove(self.rollout_cache_order, 1)
+        self.rollout_cache[old] = nil
+    end
+end
+
+function AI:_mctsSelectChild(node)
+    local best, best_score = nil, -1e9
+    local total = math.max(1, node.N)
+    local forced = self.config.mcts.forced_playouts or 10
+
+    for action, child in pairs(node.children) do
+        local q_tree = self:_graphAwareQ(child)
+        local rave = self.rave_stats[action] or { N = 0, W = 0 }
+        local q_rave = (rave.N > 0) and (rave.W / rave.N) or 0
+        local blend = rave.N / math.max(1, rave.N + (child.N or 0) + 8)
+        local q = (1 - blend) * q_tree + blend * q_rave
+
+        local forced_bonus = ((child.N or 0) < forced) and (forced - (child.N or 0)) * 0.5 or 0
+        local novelty = self:_estimateNovelty(child.state or node.state)
+        local c = self.config.mcts.c_puct * (1 + 0.22 * novelty)
+        local u = c * child.P * math.sqrt(total) / (1 + child.N)
+        local vloss = child.vloss or 0
+        local score = q + u + forced_bonus - vloss
+        if score > best_score then best, best_score = child, score end
+    end
+    return best
+end
+
+function AI:_mctsExpand(node)
+    if node.expanded then
+        self:_mctsMaybeWiden(node, node.depth or 1)
+        return
+    end
+
+    local legal = self:_legalActionSet(node.state)
+    local candidates = {}
+    for _, a in ipairs(legal) do
+        local pruned = false
+        if not tostring(a):match("^macro:") then
+            pruned = self:_pruneAction(node.state, a)
+        end
+        if not pruned then
+            candidates[#candidates + 1] = a
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        return self:_policyPrior(node.state, a) > self:_policyPrior(node.state, b)
+    end)
+
+    node.unexpanded_actions = candidates
+    node.children = node.children or {}
     node.expanded = true
+    self:_mctsMaybeWiden(node, node.depth or 1)
 end
 
 function AI:_mctsSimulateLeaf(node)
     local branches, _ = self:_predictOpponentBranches(node.state)
     local opp_action = branches[1] and branches[1].action or "idle"
-    node.state = self:_applyActionOrMacro(node.parent.state, node.action, opp_action, self.config.mcts.rollout_frames)
+
+    local pkey = node.parent and self:_hashState(node.parent.state) or "root"
+    local cache_key = string.format("%s|%s|%s|%d", pkey, tostring(node.action), tostring(opp_action), self.config.mcts.rollout_frames)
+    local cached = self:_rolloutCacheGet(cache_key)
+    if cached then
+        node.state = cached
+    else
+        node.state = self:_applyActionOrMacro(node.parent.state, node.action, opp_action, self.config.mcts.rollout_frames)
+        self:_rolloutCachePut(cache_key, node.state)
+    end
+
+    node.graph_key = self:_hashState(node.state)
+    if not self.mcts_graph[node.graph_key] then
+        self.mcts_graph[node.graph_key] = { N = 0, W = 0 }
+    end
     return self:_mctsValue(node.state)
 end
 
@@ -1555,23 +2029,72 @@ function AI:_mctsBackup(node, value)
     local cur = node
     local v = value
     while cur do
+        cur.vloss = math.max(0, (cur.vloss or 0) - (self.config.mcts.virtual_loss or 2.0))
         cur.N = cur.N + 1
         cur.W = cur.W + v
+
+        if cur.graph_key then
+            local gs = self.mcts_graph[cur.graph_key] or { N = 0, W = 0 }
+            gs.N = gs.N + 1
+            gs.W = gs.W + v
+            self.mcts_graph[cur.graph_key] = gs
+        end
+
+        if cur.action then
+            local rs = self.rave_stats[cur.action] or { N = 0, W = 0 }
+            rs.N = rs.N + 1
+            rs.W = rs.W + v
+            self.rave_stats[cur.action] = rs
+        end
+
         v = -v
         cur = cur.parent
     end
 end
 
 function AI:mctsSearch(root_state, budget_sims)
-    local root = { state = deepcopy(root_state), parent = nil, action = nil, N = 0, W = 0, P = 1, expanded = false, children = {} }
-    self:_mctsExpand(root)
+    local root_key = self:_hashState(root_state)
+    local root
+
+    if self.mcts_root_cache and self.mcts_root_cache.key == root_key and self.mcts_root_cache.node then
+        root = self.mcts_root_cache.node
+        root.parent = nil
+        root.action = nil
+        root.state = deepcopy(root_state)
+        self:_mctsDecayTree(root, self.config.mcts.root_reuse_decay or 0.99, 0, 3)
+    else
+        root = { state = deepcopy(root_state), parent = nil, action = nil, N = 0, W = 0, P = 1, expanded = false, children = {}, depth = 1, vloss = 0 }
+    end
+
+    if not root.expanded then self:_mctsExpand(root) end
+
+    if next(root.children) and self.config.muzero.enabled then
+        local eps = clamp(self.config.muzero.dirichlet_eps or 0.25, 0, 0.5)
+        local alpha = math.max(0.03, self.config.muzero.dirichlet_alpha or 0.3)
+        local noise = {}
+        local sum = 0
+        for a, _ in pairs(root.children) do
+            local n = math.pow(math.max(1e-6, self.rng()), 1 / alpha)
+            noise[a] = n
+            sum = sum + n
+        end
+        for a, child in pairs(root.children) do
+            local eta = (noise[a] or 0) / math.max(sum, 1e-6)
+            child.P = clamp((1 - eps) * (child.P or 0) + eps * eta, 0.001, 0.999)
+        end
+    end
 
     for _ = 1, budget_sims do
         local node = root
+        local depth = 1
         while node.expanded and next(node.children) do
+            self:_mctsMaybeWiden(node, depth)
             local next_node = self:_mctsSelectChild(node)
             if not next_node then break end
+            next_node.vloss = (next_node.vloss or 0) + (self.config.mcts.virtual_loss or 2.0)
             node = next_node
+            depth = depth + 1
+            node.depth = depth
             if node.state == nil and node.parent and node.action then break end
         end
 
@@ -1585,13 +2108,42 @@ function AI:mctsSearch(root_state, budget_sims)
         end
     end
 
-    local best_action, best_visits = "idle", -1
-    local top = {}
+    local best_action, best_visits, best_child = "idle", -1, nil
+    local top, denom = {}, 0
     for a, child in pairs(root.children) do
-        top[#top + 1] = { action = a, visits = child.N, q = (child.N > 0) and (child.W / child.N) or 0 }
-        if child.N > best_visits then best_visits = child.N; best_action = a end
+        local visits = child.N or 0
+        top[#top + 1] = { action = a, visits = visits, q = self:_graphAwareQ(child) }
+        denom = denom + math.max(0, visits)
+        if visits > best_visits then best_visits = visits; best_action = a; best_child = child end
     end
     table.sort(top, function(x, y) return x.visits > y.visits end)
+
+    local base_temp = math.max(0, self.config.mcts.temperature or 0)
+    local tmin = math.max(0, self.config.mcts.temperature_min or 0)
+    local tdec = clamp(self.config.mcts.temperature_decay or 0.995, 0.9, 1.0)
+    local temp = math.max(tmin, base_temp * math.pow(tdec, math.max(0, self.frame or 0)))
+    if temp > 0 and #top > 0 then
+        local logits, zsum = {}, 0
+        for i, row in ipairs(top) do
+            local p = math.pow(math.max(1e-6, row.visits / math.max(1, denom)), 1 / math.max(1e-6, temp))
+            logits[i] = p
+            zsum = zsum + p
+        end
+        local r = self.rng() * math.max(1e-6, zsum)
+        local acc = 0
+        for i, row in ipairs(top) do
+            acc = acc + (logits[i] or 0)
+            if r <= acc then best_action = row.action; break end
+        end
+    end
+
+    if best_child then
+        best_child.parent = nil
+        self.mcts_root_cache = { key = self:_hashState(best_child.state or root_state), node = best_child }
+        self.prev_root_score = (best_visits > 0) and (self:_graphAwareQ(best_child) * 100) or (self.prev_root_score or 0)
+    else
+        self.mcts_root_cache = { key = root_key, node = root }
+    end
 
     self.logs.mcts[#self.logs.mcts + 1] = { frame = self.frame, sims = budget_sims, best = best_action, top = top }
     return best_action, top
@@ -1677,8 +2229,37 @@ function AI:_moveOrderHeuristic(state, action, depth)
     if action == "block" then score = score + 20 end
 
     local fd = FRAME_DATA[action] or FRAME_DATA.idle
-    if fd.on_block and fd.on_block > -4 then score = score + 20 end
-    if fd.cancel and #fd.cancel > 0 then score = score + 15 end
+    local dist = math.abs((state.ox or 0) - (state.px or 0))
+
+    if fd.startup and fd.startup > 0 then
+        score = score + clamp(16 - fd.startup, -20, 16)
+    end
+    if fd.on_block then
+        if fd.on_block >= -2 then score = score + 26
+        elseif fd.on_block >= -5 then score = score + 12
+        else score = score - 8 end
+    end
+
+    if fd.damage and fd.damage > 0 then
+        local in_range = self:_actionInRange(state, action)
+        score = score + (in_range and (fd.damage * 1.8) or -(fd.damage * 0.35))
+    end
+
+    if action == "throw" then
+        if dist < 28 then score = score + 35 else score = score - 20 end
+    elseif action == "light" then
+        if dist < (GAME_CONSTANTS.ATTACK_RANGE_W + 12) then score = score + 12 else score = score - 6 end
+    elseif action == "heavy" then
+        if dist < (GAME_CONSTANTS.ATTACK_RANGE_W + 30) then score = score + 10 else score = score - 12 end
+    end
+
+    local cancel_count = 0
+    if type(fd.cancel) == "table" then
+        for _, frames in pairs(fd.cancel) do
+            if type(frames) == "table" and #frames > 0 then cancel_count = cancel_count + 1 end
+        end
+    end
+    score = score + cancel_count * 8
 
     score = score + (self.history_heuristic[action] or 0)
     local killers = self.killer_moves[depth]
@@ -1747,9 +2328,21 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
         for _, br in ipairs(branches) do
             local child = self:_rolloutState(state, action, br.action, 6)
             child.uncertainty = self:_propagateUncertainty(state, action, br.p)
-            local score = -self:_negaExpectimax(child, effective_depth - 1, -beta, -alpha, deadline_ms, root_depth)
             local robust_pen = child.uncertainty * ((self.timescale.match_plan == "low_variance_closeout") and 1.2 or 0.8)
-            exp_val = exp_val + br.p * (score - robust_pen)
+
+            local static_est = self:evaluateState(child) - robust_pen
+            local phase_margin = 10 * ((self.active_phase_policy and self.active_phase_policy.pruning_bias) or 1.0)
+            local root_anchor = self.prev_root_score or 0
+            local dynamic_margin = phase_margin + math.abs(root_anchor) * 0.04
+            local score
+            if (static_est < (alpha - dynamic_margin) or static_est < (root_anchor - dynamic_margin)) and effective_depth >= 3 then
+                score = static_est
+                self.logs.pruning[#self.logs.pruning + 1] = { frame = self.frame, depth = depth, action = action, reason = "heavy_loss_avoidance" }
+            else
+                score = -self:_negaExpectimax(child, effective_depth - 1, -beta, -alpha, deadline_ms, root_depth)
+                score = score - robust_pen
+            end
+            exp_val = exp_val + br.p * score
         end
 
         if exp_val > best_val then best_val, best_action = exp_val, action end
@@ -2035,7 +2628,7 @@ function AI:_planAction(obs, layer_state)
         local deadline = now_ms() + budget
         local depth = math.max(2, self.config.max_rollout_depth)
         local ordered_moves
-        score, best_action, ordered_moves = self:_negaExpectimax(root, depth, -1e9, 1e9, deadline, depth)
+        score, best_action, ordered_moves = self:_iterativeDeepeningSearch(root, depth, deadline)
         top = ordered_moves or { best_action or "idle" }
     end
 
@@ -2407,7 +3000,26 @@ function AI:update(dt, observed_player_action)
 
     self:_shapeOpponent(meta)
 
-    local reward = ((self.opponent.health or 0) - (self.player.health or 0)) * 0.01
+    local opp_guess = (meta.branches and meta.branches[1] and meta.branches[1].action) or "idle"
+    local sim_root = self:_initSimState(obs)
+    local next_obs = self:_applyActionOrMacro(sim_root, action, opp_guess, 6)
+    local reward = clamp(((next_obs.o_health or 0) - (next_obs.p_health or 0)) * 0.01, -1, 1)
+    local policy_target = {}
+    if type(meta.top) == "table" and #meta.top > 0 and type(meta.top[1]) == "table" then
+        local sum = 0
+        for _, row in ipairs(meta.top) do
+            local a = row.action
+            local v = tonumber(row.visits or row.p or 0) or 0
+            if a then
+                policy_target[a] = (policy_target[a] or 0) + math.max(0, v)
+                sum = sum + math.max(0, v)
+            end
+        end
+        if sum > 0 then
+            for _, a in ipairs(ACTIONS) do policy_target[a] = (policy_target[a] or 0) / sum end
+        end
+    end
+    self:_storeMuZeroTransition(obs, action, opp_guess, next_obs, reward, policy_target)
     self:_learningUpdate(reward)
     self:_painWeightedUpdate(reward)
     self:_epistemicSelfCritique(obs, action, meta)
@@ -2420,6 +3032,7 @@ function AI:update(dt, observed_player_action)
         self:_causalPostmortem()
     end
     if self.frame % 120 == 0 then
+        self:trainMuZeroFromReplay({ epochs = 1, batch_size = 96 })
         self:_selfCritique()
         self:_autoDiscoverWeaknesses()
         self:_detectStrategicBoredom()
@@ -2889,7 +3502,11 @@ function AI:experimentConfig()
         world_model_fallback = self.world_model_stats.fallback,
         learned_critic_enabled = self.critic and self.critic.enabled or false,
         learned_critic_updates = self.critic and self.critic.updates or 0,
-        learned_critic_loss = self.critic and self.critic.last_loss or 0
+        learned_critic_loss = self.critic and self.critic.last_loss or 0,
+        muzero_enabled = self.config.muzero.enabled,
+        muzero_updates = self.muzero_stats and self.muzero_stats.updates or 0,
+        muzero_last_loss = self.muzero_stats and self.muzero_stats.last_loss or 0,
+        muzero_replay = self.muzero_replay and #self.muzero_replay or 0
     }
 end
 
