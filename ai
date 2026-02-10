@@ -2143,10 +2143,14 @@ function AI:_execute(action)
         self.opponent.action = "heavy"
         self.opponent.attack_cooldown = math.max(self.opponent.attack_cooldown or 0, 16)
     elseif action == "special" then
-        if (self.opponent.flux or 0) >= GAME_CONSTANTS.SPECIAL_FLUX_COST then
+        local meter = self.opponent.specialMeter
+        if meter == nil then meter = self.opponent.flux or 0 end
+        if meter >= GAME_CONSTANTS.SPECIAL_FLUX_COST then
             inpt.special = true
             self.opponent.action = "special"
-            self.opponent.flux = clamp((self.opponent.flux or 0) - GAME_CONSTANTS.SPECIAL_FLUX_COST, 0, GAME_CONSTANTS.FLUX_CAP)
+            local remaining = clamp(meter - GAME_CONSTANTS.SPECIAL_FLUX_COST, 0, GAME_CONSTANTS.FLUX_CAP)
+            self.opponent.specialMeter = remaining
+            if self.opponent.flux ~= nil then self.opponent.flux = remaining end
             self.opponent.attack_cooldown = math.max(self.opponent.attack_cooldown or 0, 20)
         end
     elseif action == "throw" then
