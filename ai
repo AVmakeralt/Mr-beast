@@ -1154,6 +1154,16 @@ function AI:_applyActionToChar(state, who, action)
         state.p_move = action
         state.p_frame = 0
     end
+    self.blueprint.updates = self.blueprint.updates + count
+    self.logs.blueprint[#self.logs.blueprint + 1] = { frame = self.frame, updates = count }
+    return { updates = count }
+end
+
+function AI:_cfrKey(state)
+    local phase = self:_currentPhase(state)
+    local dist = math.floor(math.abs((state.ox or 0) - (state.px or 0)) / 20)
+    local adv = (state.frame_advantage or 0) > 0 and "plus" or "minus"
+    return string.format("%s|%s|%d", phase, adv, dist)
 end
 
 function AI:_advanceAir(state)
