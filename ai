@@ -102,12 +102,12 @@ local DEFAULT_CONFIG = {
     },
 
     phase_policy = {
-        neutral = { depth = 7, branching = 7, pruning_bias = 1.0, eval_scale = 1.0 },
-        advantage = { depth = 9, branching = 8, pruning_bias = 0.9, eval_scale = 1.1 },
-        disadvantage = { depth = 8, branching = 8, pruning_bias = 0.8, eval_scale = 0.95 },
-        knockdown = { depth = 10, branching = 9, pruning_bias = 0.85, eval_scale = 1.15 },
-        scramble = { depth = 6, branching = 6, pruning_bias = 1.2, eval_scale = 0.9 },
-        kill_range = { depth = 11, branching = 9, pruning_bias = 0.75, eval_scale = 1.25 },
+        neutral = { depth = 12, branching = 10, pruning_bias = 1.0, eval_scale = 1.0 },
+        advantage = { depth = 11, branching = 8, pruning_bias = 0.9, eval_scale = 1.1 },
+        disadvantage = { depth = 9, branching = 8, pruning_bias = 0.8, eval_scale = 0.95 },
+        knockdown = { depth = 20, branching = 6, pruning_bias = 0.85, eval_scale = 1.15 },
+        scramble = { depth = 8, branching = 7, pruning_bias = 1.2, eval_scale = 0.9 },
+        kill_range = { depth = 25, branching = 4, pruning_bias = 0.75, eval_scale = 1.25 },
         time_pressure = { depth = 10, branching = 8, pruning_bias = 0.85, eval_scale = 1.05 }
     },
 
@@ -217,6 +217,28 @@ local function clamp(v, lo, hi)
     return v
 end
 
+local function softmax_map(scores, temperature)
+    local t = math.max(1e-6, temperature or 1.0)
+    local max_s = -1e9
+    for _, v in pairs(scores or {}) do if v > max_s then max_s = v end end
+    local out, denom = {}, 0
+    for k, v in pairs(scores or {}) do
+        local e = math.exp(((v or 0) - max_s) / t)
+        out[k] = e
+        denom = denom + e
+    end
+    if denom <= 0 then return out end
+    for k, v in pairs(out) do out[k] = v / denom end
+    return out
+end
+
+local function grad_clip(v, lim)
+    local l = lim or 1.5
+    if v > l then return l end
+    if v < -l then return -l end
+    return v
+end
+
 local function now_ms()
     if love and love.timer and love.timer.getTime then
         return love.timer.getTime() * 1000
@@ -230,6 +252,20 @@ local function make_rng(seed)
         state = (1103515245 * state + 12345) % 2147483648
         return state / 2147483648
     end
+end
+
+local function _zkey(rng)
+    return math.floor(rng() * 2147483647)
+end
+
+local function init_zobrist(rng)
+    local z = { buckets = {}, hp = {}, meter = {}, move = {}, stun = {} }
+    for i = 1, 220 do z.buckets[i] = _zkey(rng) end
+    for i = 1, 40 do z.hp[i] = _zkey(rng) end
+    for i = 1, 20 do z.meter[i] = _zkey(rng) end
+    for i = 1, 64 do z.stun[i] = _zkey(rng) end
+    for i, a in ipairs(ACTIONS) do z.move[a] = _zkey(rng) + i * 97 end
+    return z
 end
 
 local function new_char(x, y, health, meter)
@@ -267,6 +303,7 @@ function AI:new(player, opponent, config)
     self.player = player
     self.opponent = opponent
     self.rng = make_rng(self.config.seed)
+    self.zobrist = init_zobrist(self.rng)
     self.frame = 0
     self.last_action = "idle"
     self.reaction_buffer = {}
@@ -291,6 +328,20 @@ function AI:new(player, opponent, config)
             block_light_trials = 0,
             personalized_bait_timing = 6
         }
+    }
+
+    self.human_policy = {
+        frame_perfect_timing = {},
+        habit_chains = {},
+        tilt_patterns = {},
+        conditioning = {
+            shielded_3x = false,
+            jumped_2x = false,
+            mashed_after_loss = false
+        },
+        windows = { actions = {}, timings = {} },
+        deception_state = { fake_repeat = 0, bait_arm = false },
+        confidence = 0.0
     }
 
     self.belief = {
@@ -375,6 +426,26 @@ function AI:new(player, opponent, config)
         curriculum_stage = 1,
         pfsp_temperature = 1.0,
         selfplay_ratio = { mcts = 1, rl = 3 }
+    }
+
+    self.live_meta = {
+        enabled = false,
+        bracket_size = 0,
+        scout_delay = 300,
+        meta_update_interval = 900,
+        dominant_actions = {},
+        counter_bias = {},
+        last_update_frame = 0,
+        observed_matches = 0,
+        current_profile = "unknown"
+    }
+
+    self.psych_warfare = {
+        enabled = true,
+        taunt_cooldown = 0,
+        last_taunt = nil,
+        next_action_hint = nil,
+        taunt_count = 0
     }
 
     self.reaction_queue = {}
@@ -542,13 +613,49 @@ function AI:_nonlinearRiskPenalty(risk, life_lead)
     return curve
 end
 
+function AI:_perfectHash(state)
+    local z = self.zobrist or init_zobrist(self.rng or make_rng(1337))
+    self.zobrist = z
+
+    local function qb(v, s, n)
+        return clamp(math.floor((v or 0) / s) + 1, 1, n)
+    end
+
+    local px = qb(state.px, 8, 110)
+    local ox = qb(state.ox, 8, 110)
+    local py = qb(state.py, 8, 110)
+    local oy = qb(state.oy, 8, 110)
+    local php = qb(state.p_health, 5, 20)
+    local ohp = qb(state.o_health, 5, 20)
+    local pm = qb(state.p_meter, 10, 10)
+    local om = qb(state.o_meter, 10, 10)
+    local pst = qb(state.p_hitstun, 1, 32)
+    local ost = qb(state.o_hitstun, 1, 32)
+
+    local h = 0
+    h = h ~ z.buckets[px]
+    h = h ~ z.buckets[ox + 110]
+    h = h ~ z.buckets[py]
+    h = h ~ z.buckets[oy + 110]
+    h = h ~ z.hp[php]
+    h = h ~ z.hp[ohp]
+    h = h ~ z.meter[pm]
+    h = h ~ z.meter[om]
+    h = h ~ z.stun[pst]
+    h = h ~ z.stun[ost]
+    h = h ~ (z.move[state.p_move or "idle"] or 0)
+    h = h ~ (z.move[state.o_move or "idle"] or 0)
+    return h
+end
+
 function AI:_hashState(state)
     local q = function(v, s) return math.floor((v or 0) / s) end
+    local zh = self:_perfectHash(state)
     return string.format(
-        "%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d",
+        "%d|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d",
         q(state.px, 8), q(state.ox, 8), q(state.py, 8), q(state.oy, 8),
         q(state.p_health, 5), q(state.o_health, 5), q(state.p_meter, 10), q(state.o_meter, 10),
-        state.p_move or "idle", state.o_move or "idle", state.p_hitstun or 0, state.o_hitstun or 0
+        state.p_move or "idle", state.o_move or "idle", state.p_hitstun or 0, state.o_hitstun or 0, zh
     )
 end
 
@@ -637,6 +744,133 @@ function AI:_updatePlayerModel(observation, player_action)
         self.player_model.style.panic_reversal = panic / recent_n
         self.player_model.style.tilt_level = clamp((mash + panic) / recent_n, 0, 1)
     end
+end
+
+function AI:_updateHumanPolicyModel(observation, player_action)
+    local hp = self.human_policy
+    local a = player_action or "unknown"
+    local w = hp.windows.actions
+    w[#w + 1] = a
+    if #w > 160 then table.remove(w, 1) end
+
+    local tw = hp.windows.timings
+    local dt = (self.frame > 1) and ((self.frame - (self._last_obs_frame or self.frame)) or 1) or 1
+    self._last_obs_frame = self.frame
+    tw[#tw + 1] = dt
+    if #tw > 160 then table.remove(tw, 1) end
+
+    local tbin = tostring(math.floor(clamp(dt, 1, 20)))
+    hp.frame_perfect_timing[tbin] = (hp.frame_perfect_timing[tbin] or 0) + 1
+
+    if #w >= 2 then
+        local key = string.format("%s->%s", w[#w - 1], w[#w])
+        hp.habit_chains[key] = (hp.habit_chains[key] or 0) + 1
+    end
+
+    local low_hp = ((self.player.health or observation.p_health or 100) <= 20)
+    local mash = (a == "light" and #w >= 2 and w[#w - 1] == "light") and 1 or 0
+    if low_hp then
+        hp.tilt_patterns.low_hp_actions = (hp.tilt_patterns.low_hp_actions or 0) + 1
+        hp.tilt_patterns.low_hp_mash = (hp.tilt_patterns.low_hp_mash or 0) + mash
+    end
+    if a == "block" and (observation.p_hitstun or 0) > 0 then
+        hp.tilt_patterns.missed_parry = (hp.tilt_patterns.missed_parry or 0) + 1
+    end
+    if a == "block" and (observation.o_hitstun or 0) > 0 then
+        hp.tilt_patterns.perfect_shield = (hp.tilt_patterns.perfect_shield or 0) + 1
+    end
+
+    local c = hp.conditioning
+    local n = #w
+    c.shielded_3x = (n >= 3 and w[n] == "block" and w[n-1] == "block" and w[n-2] == "block")
+    c.jumped_2x = (n >= 2 and w[n] == "jump" and w[n-1] == "jump")
+    c.mashed_after_loss = (low_hp and mash == 1)
+
+    local ds = hp.deception_state or { fake_repeat = 0, bait_arm = false }
+    if c.shielded_3x then
+        ds.fake_repeat = math.min(6, (ds.fake_repeat or 0) + 1)
+    else
+        ds.fake_repeat = math.max(0, (ds.fake_repeat or 0) - 1)
+    end
+    ds.bait_arm = (ds.fake_repeat or 0) >= 2 or c.jumped_2x or c.mashed_after_loss
+    hp.deception_state = ds
+
+    local evidence = 0
+    if c.shielded_3x then evidence = evidence + 1 end
+    if c.jumped_2x then evidence = evidence + 1 end
+    if c.mashed_after_loss then evidence = evidence + 1 end
+    hp.confidence = clamp(0.92 * (hp.confidence or 0) + 0.08 * (evidence / 3), 0, 1)
+end
+
+function AI:simulateKnockback(target_percent, kb_base, kb_growth, hit_angle, position)
+    local pct = math.max(0, target_percent or 0)
+    local base = kb_base or 28
+    local growth = kb_growth or 1.05
+    local ang = math.rad(hit_angle or 45)
+
+    local kb = base + growth * pct
+    local vx = math.cos(ang) * kb * 0.095
+    local vy = -math.sin(ang) * kb * 0.095
+
+    local x = position and (position.x or 0) or 0
+    local y = position and (position.y or GAME_CONSTANTS.PLATFORM_Y) or GAME_CONSTANTS.PLATFORM_Y
+    local blast_x = GAME_CONSTANTS.SCREEN_W + 110
+    local blast_y = -140
+
+    local frames_to_death = 999
+    local max_frames = 120
+    for f = 1, max_frames do
+        x = x + vx
+        y = y + vy
+        vy = vy + GAME_CONSTANTS.GRAVITY * 0.55
+        vx = vx * 0.992
+        if math.abs(x) > blast_x or y < blast_y then
+            frames_to_death = f
+            break
+        end
+    end
+
+    return { kb = kb, frames_to_death = frames_to_death, final_x = x, final_y = y }
+end
+
+function AI:killConfirmPercent(target_percent, kb_base, kb_growth, hit_angle, position)
+    local traj = self:simulateKnockback(target_percent, kb_base, kb_growth, hit_angle, position)
+    return traj.frames_to_death < 10, traj
+end
+
+function AI:proPlayerHeuristic(move, state)
+    local hp = self.human_policy
+    local cond = hp.conditioning or {}
+    local dist = math.abs((state.ox or 0) - (state.px or 0))
+    local disadv = ((state.p_hitstun or 0) > 0) or ((state.p_blockstun or 0) > 0) or ((state.frame_advantage or 0) < 0)
+    local score = 1.0
+
+    if disadv and move == "block" then score = score + 0.65 end
+    if cond.shielded_3x and (move == "throw" or move == "heavy") then score = score + 0.45 end
+    if cond.jumped_2x and move == "light" and FRAME_DATA.light.anti_air then score = score + 0.55 end
+    if cond.mashed_after_loss and move == "block" then score = score + 0.35 end
+
+    if dist < 34 and move == "throw" then score = score + 0.4 end
+    if dist > 120 and move == "special" then score = score + 0.25 end
+    if move == "jump" and cond.jumped_2x then score = score - 0.25 end
+
+    local dp = hp.deception_state
+    if dp and dp.bait_arm and (move == "walk_back" or move == "block") then score = score + 0.25 end
+
+    local kill, _ = self:killConfirmPercent(state.p_health or 0, 34, 1.22, 43, { x = state.px or 0, y = state.py or GAME_CONSTANTS.PLATFORM_Y })
+    if kill and (move == "heavy" or move == "special") then score = score + 0.7 end
+
+    return clamp(score, 0.1, 3.5)
+end
+
+function AI:humanBiasedPolicy(state, temperature)
+    local legal_moves = self:_legalActionSet(state)
+    local scores = {}
+    for _, move in ipairs(legal_moves) do
+        local prior = self:_policyPrior(state, move)
+        scores[move] = self:proPlayerHeuristic(move, state) * prior
+    end
+    return softmax_map(scores, temperature or 1.2)
 end
 
 function AI:_epistemicMode()
@@ -865,6 +1099,11 @@ function AI:_counterfactualResponsibility(obs, action)
         self.belief.confidence = clamp((self.belief.confidence or 0.5) - 0.02, 0.1, 0.95)
         local key = self.last_action or "idle"
         self.player_model.confidence[key] = clamp((self.player_model.confidence[key] or 0.5) * 0.95, 0, 1)
+        local hp = self.human_policy
+        hp.skill_ceiling = clamp((hp.skill_ceiling or 0.5) - 0.035, 0.1, 0.95)
+    else
+        local hp = self.human_policy
+        hp.skill_ceiling = clamp((hp.skill_ceiling or 0.5) + 0.015, 0.1, 0.95)
     end
 
     self.logs.responsibility[#self.logs.responsibility + 1] = {
@@ -2197,8 +2436,64 @@ function AI:_predictOpponentBranches(obs)
     for _, b in ipairs(branches) do sum2 = sum2 + b.p end
     for _, b in ipairs(branches) do b.p = b.p / math.max(sum2, 1e-6) end
 
-    local conf = clamp(0.25 + 0.75 * (self.belief.confidence or 0.5), 0.1, 0.95)
-    return branches, { confidence = conf, reason = "genbr_persona_bayes", persona = persona }
+    local hp_dist = self:humanBiasedPolicy(obs, 1.15)
+    local hconf = clamp(self.human_policy.confidence or 0, 0, 1)
+    for _, b in ipairs(branches) do
+        local hp = hp_dist[b.action] or (1 / #branches)
+        b.p = (1 - 0.35 * hconf) * b.p + (0.35 * hconf) * hp
+    end
+    local sum3 = 0
+    for _, b in ipairs(branches) do sum3 = sum3 + b.p end
+    for _, b in ipairs(branches) do b.p = b.p / math.max(sum3, 1e-6) end
+
+    local conf = clamp(0.2 + 0.6 * (self.belief.confidence or 0.5) + 0.2 * hconf, 0.1, 0.98)
+    return branches, { confidence = conf, reason = "genbr_persona_bayes_humanpolicy", persona = persona, human_confidence = hconf }
+end
+
+function AI:_isLosingPosition(state, action, horizon)
+    local h = math.max(1, horizon or 3)
+    local child = self:_rolloutState(state, action, "light", 3)
+    local v = self:evaluateState(child)
+    if v < -18 then return true end
+    if h <= 1 then return false end
+
+    local worst = 1e9
+    local probes = { "light", "heavy", "throw" }
+    for _, oa in ipairs(probes) do
+        local n = self:_rolloutState(state, action, oa, 4)
+        local sc = self:evaluateState(n)
+        if sc < worst then worst = sc end
+    end
+    return worst < -24
+end
+
+function AI:_smartPrune(state, action, depth)
+    local fd = FRAME_DATA[action] or FRAME_DATA.idle
+    if (fd.on_block or 0) <= -12 and (state.frame_advantage or 0) < -2 then
+        return true, "unsafe_block"
+    end
+    if depth and depth >= 2 and self:_isLosingPosition(state, action, 3) then
+        return true, "leads_to_loss"
+    end
+    return false, ""
+end
+
+function AI:_killConfirmBonus(state, action)
+    if action ~= "heavy" and action ~= "special" and action ~= "throw" then return 0 end
+    local kill, traj = self:killConfirmPercent(state.p_health or 0, 34, 1.22, 43, { x = state.px or 0, y = state.py or GAME_CONSTANTS.PLATFORM_Y })
+    if not kill then return 0 end
+    local urgency = clamp((12 - (traj.frames_to_death or 12)) / 12, 0, 1)
+    return 120 * urgency
+end
+
+function AI:_moveOrder(state, action)
+    local PRO_MOVE_BONUS = {
+        ["throw"] = 150,
+        ["light"] = 120,
+        ["special"] = 90,
+        ["block"] = 60,
+    }
+    return (PRO_MOVE_BONUS[action] or 0) + self:_killConfirmBonus(state, action)
 end
 
 function AI:_pruneAction(state, action)
@@ -2221,7 +2516,7 @@ function AI:_pruneAction(state, action)
 end
 
 function AI:_moveOrderHeuristic(state, action, depth)
-    local score = 0
+    local score = self:_moveOrder(state, action)
     if action == "special" then score = score + 90 end
     if action == "heavy" then score = score + 70 end
     if action == "light" then score = score + 60 end
@@ -2304,9 +2599,14 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
 
     local branches, _ = self:_predictOpponentBranches(state)
     local moves = {}
-    for i = 1, math.min(#ACTIONS, self.config.max_branching) do
+    local branching_cap = self:_branchingLimit(effective_depth)
+    for i = 1, math.min(#ACTIONS, branching_cap) do
         local a = ACTIONS[i]
         local pruned, reason = self:_pruneAction(state, a)
+        if not pruned then
+            local sp, sr = self:_smartPrune(state, a, depth)
+            if sp then pruned, reason = true, sr end
+        end
         if pruned then
             self.logs.pruning[#self.logs.pruning + 1] = { frame = self.frame, depth = depth, action = a, reason = reason }
         else
@@ -2320,10 +2620,25 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
         end)
     end
 
+    local tt_move = (self.transposition[key] and self.transposition[key].best_action) or nil
+    local pv_move = self.search_pv[effective_depth]
+    local function promote(arr, mv)
+        if not mv then return end
+        for i = 1, #arr do
+            if arr[i] == mv then
+                table.remove(arr, i)
+                table.insert(arr, 1, mv)
+                return
+            end
+        end
+    end
+    promote(moves, tt_move)
+    promote(moves, pv_move)
+
     local best_val, best_action = -1e12, (moves[1] or "idle")
     local original_alpha = alpha
 
-    for _, action in ipairs(moves) do
+    for mi, action in ipairs(moves) do
         local exp_val = 0
         for _, br in ipairs(branches) do
             local child = self:_rolloutState(state, action, br.action, 6)
@@ -2361,6 +2676,8 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
         if best_val >= beta then bound = "lower" end
         self.transposition[key] = { eval = best_val, depth = effective_depth, bound = bound, best_action = best_action }
     end
+
+    self.search_pv[effective_depth] = best_action
 
     if depth == root_depth then return best_val, best_action, moves end
     return best_val
@@ -2501,6 +2818,152 @@ function AI:_cachedInstinct(obs)
     return best
 end
 
+function AI:enableLiveMetaLearning(cfg)
+    local c = cfg or {}
+    self.live_meta.enabled = true
+    self.live_meta.bracket_size = math.max(2, c.bracket_size or 64)
+    self.live_meta.scout_delay = math.max(60, c.scout_delay or 300)
+    self.live_meta.meta_update_interval = math.max(120, c.meta_update_interval or 900)
+    self.live_meta.last_update_frame = self.frame
+    return deepcopy(self.live_meta)
+end
+
+function AI:_updateLiveMetaLearning(obs)
+    local lm = self.live_meta
+    if not lm.enabled then return end
+    if self.frame < lm.scout_delay then return end
+
+    local w = self.human_policy.windows.actions or {}
+    local start_i = math.max(1, #w - 120)
+    local freq = {}
+    local total = 0
+    for i = start_i, #w do
+        local a = w[i]
+        if a then
+            freq[a] = (freq[a] or 0) + 1
+            total = total + 1
+        end
+    end
+    if total <= 0 then return end
+
+    for a, c in pairs(freq) do
+        lm.dominant_actions[a] = 0.9 * (lm.dominant_actions[a] or 0) + 0.1 * (c / total)
+    end
+
+    local dominant, share = "idle", 0
+    for a, p in pairs(lm.dominant_actions) do
+        if p > share then dominant, share = a, p end
+    end
+    lm.current_profile = dominant
+
+    local counter = { jump = "light", block = "throw", light = "block", heavy = "block", special = "walk_back", throw = "jump", walk_fwd = "light", walk_back = "walk_fwd", idle = "walk_fwd" }
+    lm.counter_bias = { dominant = dominant, share = share, recommended = counter[dominant] or "block" }
+    lm.observed_matches = lm.observed_matches + 1
+
+    if self.frame - (lm.last_update_frame or 0) >= lm.meta_update_interval then
+        lm.last_update_frame = self.frame
+        self.logs.live_meta[#self.logs.live_meta + 1] = {
+            frame = self.frame,
+            dominant = dominant,
+            share = share,
+            recommended = lm.counter_bias.recommended,
+            bracket_size = lm.bracket_size,
+            observed = lm.observed_matches
+        }
+    end
+end
+
+function AI:playTaunt(message)
+    local p = self.psych_warfare
+    if not p.enabled then return false end
+    if (p.taunt_cooldown or 0) > 0 then return false end
+    p.last_taunt = tostring(message or "")
+    p.taunt_cooldown = 300
+    p.taunt_count = (p.taunt_count or 0) + 1
+    self.logs.taunts[#self.logs.taunts + 1] = { frame = self.frame, message = p.last_taunt }
+    return true
+end
+
+function AI:predictTiltCascade(player_history)
+    local h = player_history or {}
+    local losses = h.loss_streak or 0
+    local shield = h.shield_streak or 0
+    local mash = h.mash_ratio or 0
+    local low_hp = h.low_hp and 1 or 0
+
+    local tilt = clamp(0.18 + 0.16 * losses + 0.08 * shield + 0.42 * mash + 0.16 * low_hp, 0, 0.98)
+    local predicted_mash = (tilt > 0.58) or mash > 0.45
+    local optimal_counter = predicted_mash and "block" or ((shield > 5) and "throw" or "light")
+    local confidence = clamp(0.45 + 0.45 * tilt, 0.2, 0.97)
+
+    return {
+        tilt_probability = tilt,
+        predicted_mash = predicted_mash,
+        optimal_counter = optimal_counter,
+        confidence = confidence
+    }
+end
+
+function AI:psychologicalTiltInducer(player_stats)
+    local ps = player_stats or {}
+    local p = self.psych_warfare
+    if not p.enabled then return nil end
+
+    local hint = nil
+    if (ps.shield_streak or 0) > 5 then
+        self:playTaunt("Predictable shielding detected")
+        hint = "throw"
+    elseif (ps.mash_ratio or 0) > 0.5 then
+        self:playTaunt("Mash pattern detected")
+        hint = "block"
+    elseif (ps.jump_ratio or 0) > 0.35 then
+        self:playTaunt("Jump escape pattern read")
+        hint = "light"
+    end
+
+    p.next_action_hint = hint
+    return hint
+end
+
+function AI:_humanPolicyStats()
+    local w = self.human_policy.windows.actions or {}
+    local n = math.min(#w, 80)
+    if n <= 0 then return { shield_streak = 0, mash_ratio = 0, jump_ratio = 0, loss_streak = 0, low_hp = false } end
+
+    local shield_streak, mash, jump = 0, 0, 0
+    local cur_shield = 0
+    for i = #w - n + 1, #w do
+        local a = w[i]
+        if a == "block" then
+            cur_shield = cur_shield + 1
+            shield_streak = math.max(shield_streak, cur_shield)
+        else
+            cur_shield = 0
+        end
+        if a == "light" and i > 1 and w[i-1] == "light" then mash = mash + 1 end
+        if a == "jump" then jump = jump + 1 end
+    end
+
+    local eval_n = math.min(30, #self.logs.eval_scores)
+    local losses = 0
+    for i = #self.logs.eval_scores - eval_n + 1, #self.logs.eval_scores do
+        if i >= 1 and (self.logs.eval_scores[i] or 0) < 0 then losses = losses + 1 end
+    end
+
+    local missed_parry = self.human_policy.tilt_patterns.missed_parry or 0
+    local perfect_shield = self.human_policy.tilt_patterns.perfect_shield or 0
+    self.human_policy.skill_ceiling = clamp(0.5 + 0.06 * perfect_shield - 0.05 * missed_parry, 0.1, 0.95)
+
+    return {
+        shield_streak = shield_streak,
+        mash_ratio = mash / n,
+        jump_ratio = jump / n,
+        loss_streak = losses,
+        low_hp = ((self.player.health or 100) <= 20),
+        skill_ceiling = self.human_policy.skill_ceiling
+    }
+end
+
 function AI:_conditionOpponentModel(obs)
     local style = self.player_model.style
     local respect = clamp((self.belief.perceived_threat or 0.5) + (style.panic_reversal or 0) * 0.25 - (style.backdash_frequency or 0) * 0.15, 0, 1)
@@ -2632,8 +3095,28 @@ function AI:_planAction(obs, layer_state)
         top = ordered_moves or { best_action or "idle" }
     end
 
+    local pstats = self:_humanPolicyStats()
+    local cascade = self:predictTiltCascade(pstats)
+    local taunt_hint = self:psychologicalTiltInducer(pstats)
+    local live_meta_bias = self.live_meta.enabled and self.live_meta.counter_bias and self.live_meta.counter_bias.recommended or nil
+
+    if cascade.predicted_mash and cascade.confidence > 0.7 then
+        best_action = cascade.optimal_counter or best_action
+    end
+    if taunt_hint then best_action = taunt_hint end
+    if live_meta_bias and (self.frame % 90) < 18 then best_action = live_meta_bias end
+
     if self:_isStrategyRetired(best_action) then
         best_action = "block"
+    end
+
+    local kill_now = self:killConfirmPercent(obs.p_health or 0, 34, 1.22, 43, { x = obs.px or 0, y = obs.py or GAME_CONSTANTS.PLATFORM_Y })
+    if kill_now and (best_action == "light" or best_action == "walk_fwd") then
+        if (obs.o_meter or 0) >= GAME_CONSTANTS.SPECIAL_FLUX_COST then
+            best_action = "special"
+        else
+            best_action = "heavy"
+        end
     end
 
     local conf, worst, mean = self:_decisionConfidenceAndRisk(root, best_action or "idle", branches)
@@ -2668,7 +3151,10 @@ function AI:_planAction(obs, layer_state)
         strategic_pace = strategic.pace,
         strategic_win_condition = strategic.win_condition,
         volatility = volatility,
-        epistemic_mode = epi_mode
+        epistemic_mode = epi_mode,
+        tilt_cascade = cascade,
+        taunt_hint = taunt_hint,
+        live_meta = deepcopy(self.live_meta.counter_bias or {})
     }
 end
 
@@ -2985,9 +3471,14 @@ function AI:update(dt, observed_player_action)
 
     local obs = self:_observeState()
     self:_updatePlayerModel(obs, observed_player_action)
+    self:_updateHumanPolicyModel(obs, observed_player_action)
     self:_reactionQueuePush(observed_player_action or "unknown")
     self:_updateBeliefState(obs, observed_player_action)
     self:_updateTimescalePlan(obs)
+    self:_updateLiveMetaLearning(obs)
+    if (self.psych_warfare.taunt_cooldown or 0) > 0 then
+        self.psych_warfare.taunt_cooldown = self.psych_warfare.taunt_cooldown - 1
+    end
 
     local state_label, state_conf = self:_classifyState(obs)
     local strategic = self:_updateStrategicLayer(obs, state_label)
@@ -3510,6 +4001,50 @@ function AI:experimentConfig()
     }
 end
 
+
+function AI:batchEvaluateStates(states)
+    local out = {}
+    for i, st in ipairs(states or {}) do
+        out[i] = self:evaluateState(st)
+    end
+    return out
+end
+
+function AI:gpuBatchRollout(states)
+    local list = states or {}
+    local ok_torch = type(rawget(_G, "torch")) == "table" and self.nn_model and self.nn_model.forward
+    if ok_torch then
+        local features = {}
+        for i, st in ipairs(list) do
+            local f = self:extractFeatures(st)
+            features[i] = self:_criticFeatureVector(f)
+        end
+        local ok, vals = pcall(function()
+            local batch = _G.torch.tensor(features)
+            local pred = self.nn_model:forward(batch)
+            local out = {}
+            for i = 1, #list do out[i] = pred[i] end
+            return out
+        end)
+        if ok and vals then return vals end
+    end
+    return self:batchEvaluateStates(list)
+end
+
+function AI:runSearchSanityChecks()
+    local obs = self:_observeState()
+    local root = self:_initSimState(obs)
+    local act, top = self:mctsSearch(root, math.min(128, self.config.mcts.simulations or 128))
+    local score = self:evaluateState(self:_applyActionOrMacro(root, act or "idle", "idle", 6))
+    return {
+        action = act,
+        top_count = (top and #top) or 0,
+        score = score,
+        tt_size = (function(t) local c=0; for _ in pairs(t or {}) do c=c+1 end; return c end)(self.transposition),
+        replay_size = self.muzero_replay and #self.muzero_replay or 0,
+        human_confidence = self.human_policy and self.human_policy.confidence or 0
+    }
+end
 
 function AI:exportLearnedCritic()
     if not self.critic then return nil end
