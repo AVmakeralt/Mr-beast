@@ -380,7 +380,6 @@ function AI:new(player, opponent, config)
     self.rollout_cache = {}
     self.rollout_cache_order = {}
     self.prev_root_score = 0
-    self.search_pv = {}
 
 
     self.fairness = {
@@ -513,9 +512,7 @@ function AI:new(player, opponent, config)
         shaping = {},
         benchmarks = {},
         rl = {},
-        muzero = {},
-        live_meta = {},
-        taunts = {}
+        muzero = {}
     }
 
     self.learning = {
@@ -1774,7 +1771,7 @@ function AI:trainMuZeroFromReplay(opts)
 
             local v_raw = m.val_b or 0
             for i = 1, #z do v_raw = v_raw + (m.val_w[i] or 0) * (z[i] or 0) end
-            local dv = grad_clip(value_err * (1 - math.tanh(v_raw)^2), 1.25)
+            local dv = value_err * (1 - math.tanh(v_raw)^2)
             for i = 1, #z do
                 m.val_w[i] = (m.val_w[i] or 0) + lr * dv * (z[i] or 0)
             end
@@ -1782,7 +1779,7 @@ function AI:trainMuZeroFromReplay(opts)
 
             local p_loss = 0
             for _, a in ipairs(ACTIONS) do
-                local pe = grad_clip((p_target[a] or 0) - (p_pred[a] or 0), 1.0)
+                local pe = (p_target[a] or 0) - (p_pred[a] or 0)
                 p_loss = p_loss + pe * pe
                 local wa = m.policy_w[a] or {}
                 for i = 1, #z do wa[i] = (wa[i] or 0) + lr * pe * (z[i] or 0) end
@@ -1809,7 +1806,7 @@ function AI:trainMuZeroFromReplay(opts)
 
                 local r_raw = 0
                 for i = 1, #z_next_pred do r_raw = r_raw + (m.dyn_reward_w[i] or 0) * (z_next_pred[i] or 0) end
-                local dr = grad_clip(reward_err * (1 - math.tanh(r_raw)^2), 1.25)
+                local dr = reward_err * (1 - math.tanh(r_raw)^2)
 
                 for i = 1, #z_step do
                     m.dyn_reward_w[i] = (m.dyn_reward_w[i] or 0) + lr * dr * (z_next_pred[i] or 0)
@@ -1818,7 +1815,7 @@ function AI:trainMuZeroFromReplay(opts)
                     local row = m.dyn_state_w[i] or {}
                     local zraw = m.dyn_b[i] or 0
                     for j = 1, #inp do zraw = zraw + (row[j] or 0) * (inp[j] or 0) end
-                    local dz = grad_clip(latent_err * (1 - math.tanh(zraw)^2), 1.0)
+                    local dz = latent_err * (1 - math.tanh(zraw)^2)
                     for j = 1, #inp do row[j] = (row[j] or 0) + lr * dz * (inp[j] or 0) end
                     m.dyn_state_w[i] = row
                     m.dyn_b[i] = (m.dyn_b[i] or 0) + lr * dz
@@ -2071,12 +2068,6 @@ function AI:_iterativeDeepeningSearch(root, max_depth, deadline)
     end
 
     return best_score, best_action, best_moves
-end
-
-function AI:_branchingLimit(depth)
-    local d = math.max(1, depth or 1)
-    local scaled = math.floor(math.pow(d, 1.2) + 2)
-    return math.max(3, math.min(self.config.max_branching, scaled))
 end
 
 function AI:_policyPrior(state, action)
@@ -2663,16 +2654,7 @@ function AI:_negaExpectimax(state, depth, alpha, beta, deadline_ms, root_depth)
                 score = static_est
                 self.logs.pruning[#self.logs.pruning + 1] = { frame = self.frame, depth = depth, action = action, reason = "heavy_loss_avoidance" }
             else
-                local child_depth = effective_depth - 1
-                local reduced = false
-                if mi >= 4 and effective_depth >= 4 and action ~= tt_move and action ~= pv_move then
-                    child_depth = effective_depth - 2
-                    reduced = true
-                end
-                score = -self:_negaExpectimax(child, child_depth, -beta, -alpha, deadline_ms, root_depth)
-                if reduced and score > alpha then
-                    score = -self:_negaExpectimax(child, effective_depth - 1, -beta, -alpha, deadline_ms, root_depth)
-                end
+                score = -self:_negaExpectimax(child, effective_depth - 1, -beta, -alpha, deadline_ms, root_depth)
                 score = score - robust_pen
             end
             exp_val = exp_val + br.p * score
